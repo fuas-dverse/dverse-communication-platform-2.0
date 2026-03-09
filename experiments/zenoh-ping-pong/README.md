@@ -2,14 +2,14 @@
 
 ## Structure
 2 projects:
- - one listens on `/ping`
-  - on message received:
-   - print the message
-   - publish a message with content `{ID} pong` on `/pong`
- - one listens on `/pong`
-  - on message received:
-   - print the message
-   - publish a message with content `{ID} ping` on `/ping`
+- one listens on `/ping`
+    - on message received:
+        - print the message
+        - publish a message with content `{ID} pong` on `/pong`
+- one listens on `/pong`
+    - on message received:
+        - print the message
+        - publish a message with content `{ID} ping` on `/ping`
 
 ## To use:
 
