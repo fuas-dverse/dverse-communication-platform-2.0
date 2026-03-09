@@ -1,58 +1,35 @@
-use std::io::{self, Write};
+use chrono::prelude::*;
+use clap::Parser;
 use std::fs::{self, Metadata};
 use std::os::unix::fs::MetadataExt;
 use std::time::UNIX_EPOCH;
-use users::{get_user_by_uid, get_group_by_gid};
-use chrono::prelude::*;
+use users::{get_group_by_gid, get_user_by_uid};
 
-fn main() {
-    let stdin = io::stdin();
-    loop {
-        print!("> ");
-        io::stdout().flush().unwrap();
+#[derive(Parser)]
+#[command(author, version, about = "Rust implementation of ls", long_about = None)]
+struct Args {
+    /// Show hidden files
+    #[arg(short = 'a', long)]
+    show_hidden: bool,
 
-        let mut input = String::new();
-        if stdin.read_line(&mut input).is_err() {
-            break;
-        }
+    /// Long format listing
+    #[arg(short = 'l', long)]
+    long_format: bool,
 
-        let input = input.trim();
-        if input.is_empty() {
-            continue;
-        }
-
-        if input == "exit" || input == "quit" {
-            break;
-        }
-
-        let mut parts = input.split_whitespace();
-        let cmd = parts.next().unwrap();
-        let args: Vec<&str> = parts.collect();
-
-        match cmd {
-            "ls" => run_ls(&args),
-            _ => println!("Unknown command: {}", cmd),
-        }
-    }
+    /// Directory path
+    #[arg(default_value = ".")]
+    path: String,
 }
 
-fn run_ls(args: &[&str]) {
-    let mut show_hidden = false;
-    let mut long_format = false;
-    let mut path = ".";
+fn main() {
+    let args = Args::parse();
+    run_ls(&args.path, args.show_hidden, args.long_format);
+}
 
-    for arg in args {
-        if arg.starts_with('-') {
-            if arg.contains('a') { show_hidden = true; }
-            if arg.contains('l') { long_format = true; }
-        } else {
-            path = arg;
-        }
-    }
-
+fn run_ls(path: &str, show_hidden: bool, long_format: bool) {
     match fs::read_dir(path) {
         Ok(entries) => {
-            let mut files: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+            let mut files: Vec<_> = entries.filter_map(Result::ok).collect();
             files.sort_by_key(|f| f.file_name());
 
             for entry in files {
@@ -78,16 +55,19 @@ fn run_ls(args: &[&str]) {
 }
 
 fn print_long(metadata: &Metadata, name: &str) {
-    let mode = metadata.mode();
-    let perms = format_permissions(mode);
+    let perms = format_permissions(metadata.mode());
     let nlink = metadata.nlink();
     let uid = metadata.uid();
     let gid = metadata.gid();
     let size = metadata.size();
     let mtime = metadata.mtime();
 
-    let user = get_user_by_uid(uid).map(|u| u.name().to_string_lossy().to_string()).unwrap_or(uid.to_string());
-    let group = get_group_by_gid(gid).map(|g| g.name().to_string_lossy().to_string()).unwrap_or(gid.to_string());
+    let user = get_user_by_uid(uid)
+        .map(|u| u.name().to_string_lossy().to_string())
+        .unwrap_or(uid.to_string());
+    let group = get_group_by_gid(gid)
+        .map(|g| g.name().to_string_lossy().to_string())
+        .unwrap_or(gid.to_string());
 
     let datetime = UNIX_EPOCH + std::time::Duration::new(mtime as u64, 0);
     let datetime: DateTime<Local> = datetime.into();
@@ -105,15 +85,24 @@ fn print_long(metadata: &Metadata, name: &str) {
 }
 
 fn format_permissions(mode: u32) -> String {
-    let mut perms = String::new();
-    perms.push(if mode & 0o040000 != 0 { 'd' } else { '-' });
-    let flags = [(0o400, 'r'), (0o200, 'w'), (0o100, 'x'),
-        (0o040, 'r'), (0o020, 'w'), (0o010, 'x'),
-        (0o004, 'r'), (0o002, 'w'), (0o001, 'x')];
+    let file_type = if mode & 0o040000 != 0 { 'd' } else { '-' };
 
-    for (bit, ch) in flags.iter() {
-        perms.push(if mode & bit != 0 { *ch } else { '-' });
-    }
+    let perm_bits = [
+        (mode >> 6) & 0o7, // user
+        (mode >> 3) & 0o7, // group
+        mode & 0o7,        // others
+    ];
 
-    perms
+    let perms: String = perm_bits
+        .iter()
+        .map(|&bits| {
+            ['r', 'w', 'x']
+                .iter()
+                .enumerate()
+                .map(|(i, ch)| if bits & (1 << (2 - i)) != 0 { *ch } else { '-' })
+                .collect::<String>()
+        })
+        .collect();
+
+    format!("{}{}", file_type, perms)
 }
