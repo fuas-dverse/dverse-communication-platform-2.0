@@ -1,0 +1,12 @@
+/mnt/c/Users/abelm/projects/dverse-communication-platform-2.0/target/debug/deps/users-86b0d202ec15773e.d: /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/lib.rs /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/base.rs /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/cache.rs /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/mock.rs /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/switch.rs /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/traits.rs
+
+/mnt/c/Users/abelm/projects/dverse-communication-platform-2.0/target/debug/deps/libusers-86b0d202ec15773e.rlib: /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/lib.rs /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/base.rs /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/cache.rs /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/mock.rs /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/switch.rs /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/traits.rs
+
+/mnt/c/Users/abelm/projects/dverse-communication-platform-2.0/target/debug/deps/libusers-86b0d202ec15773e.rmeta: /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/lib.rs /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/base.rs /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/cache.rs /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/mock.rs /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/switch.rs /home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/traits.rs
+
+/home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/lib.rs:
+/home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/base.rs:
+/home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/cache.rs:
+/home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/mock.rs:
+/home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/switch.rs:
+/home/abelm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/users-0.11.0/src/traits.rs:
