@@ -1,9 +1,9 @@
-use chrono::prelude::*;
-use clap::Parser;
 use std::fs::{self, Metadata};
 use std::os::unix::fs::MetadataExt;
 use std::time::UNIX_EPOCH;
-use users::{get_group_by_gid, get_user_by_uid};
+use users::{get_user_by_uid, get_group_by_gid};
+use chrono::prelude::*;
+use clap::Parser;
 
 #[derive(Parser)]
 #[command(author, version, about = "Rust implementation of ls", long_about = None)]
@@ -84,25 +84,27 @@ fn print_long(metadata: &Metadata, name: &str) {
     );
 }
 
+fn is_dir(mode: u32) -> char {
+    match mode & 0o040000 {
+        0 => '-',
+        _ => 'd'
+    }
+}
+
+fn rwx(bits: u32) -> [char; 3] {
+    let bits = bits & 0b111;
+
+    [
+        match bits & 0b100 { 0 => '-', _ => 'r' },
+        match bits & 0b010 { 0 => '-', _ => 'w' },
+        match bits & 0b001 { 0 => '-', _ => 'x' }
+    ]
+}
+
 fn format_permissions(mode: u32) -> String {
-    let file_type = if mode & 0o040000 != 0 { 'd' } else { '-' };
-
-    let perm_bits = [
-        (mode >> 6) & 0o7, // user
-        (mode >> 3) & 0o7, // group
-        mode & 0o7,        // others
-    ];
-
-    let perms: String = perm_bits
-        .iter()
-        .map(|&bits| {
-            ['r', 'w', 'x']
-                .iter()
-                .enumerate()
-                .map(|(i, ch)| if bits & (1 << (2 - i)) != 0 { *ch } else { '-' })
-                .collect::<String>()
-        })
-        .collect();
-
-    format!("{}{}", file_type, perms)
+    std::iter::once(is_dir(mode))
+        .chain(rwx(mode >> 6))
+        .chain(rwx(mode >> 3))
+        .chain(rwx(mode >> 0))
+        .collect()
 }
