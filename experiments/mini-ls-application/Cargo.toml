@@ -7,7 +7,3 @@ edition = "2024"
 users = "0.11.0"
 chrono = "0.4.44"
 clap = { version = "4.5.60", features = ["derive"] }
-<<<<<<<< HEAD:mini_ls/Cargo.toml
-========
-
->>>>>>>> origin/feature/ls-app:experiments/mini-ls-application/Cargo.toml
