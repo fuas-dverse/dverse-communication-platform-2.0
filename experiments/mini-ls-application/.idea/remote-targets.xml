@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="RemoteTargetsManager">
+    <targets>
+      <target name="WSL - Ubuntu" type="wsl" uuid="a3425c22-cbe3-4c3f-8104-f4aafb882154">
+        <config>
+          <option name="distributionMsId" value="Ubuntu" />
+          <option name="projectRootOnTarget" value="{exitCode=0, timeout=false, cancelled=false, stdout=/tmp/tmp.s5Q1w5CMNX&#13;&#10;, stderr=}/mini_ls" />
+        </config>
+        <ContributedStateBase type="RsLanguageRuntime">
+          <config>
+            <option name="cargoPath" value="/home/abelm/.cargo/bin/cargo" />
+            <option name="cargoVersion" value="1.93.1 (083ac5135 2025-12-15)" />
+            <option name="rustcPath" value="/home/abelm/.cargo/bin/rustc" />
+            <option name="rustcVersion" value="1.93.1 (01f6ddf75 2026-02-11)" />
+          </config>
+        </ContributedStateBase>
+      </target>
+    </targets>
+  </component>
+</project>

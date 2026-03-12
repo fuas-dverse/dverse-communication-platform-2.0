@@ -1,0 +1,19 @@
+{
+  mode: "client",
+
+  connect: {
+    endpoints: ["tls/127.0.0.1:7447"],
+  },
+
+  transport: {
+    link: {
+      tls: {
+        connect_certificate: "../certs/client.crt",
+        connect_private_key: "../certs/client.key",
+        root_ca_certificate: "../certs/ca.crt",
+        enable_mtls:         true,
+        verify_name_on_connect: false,
+      }
+    }
+  }
+}
