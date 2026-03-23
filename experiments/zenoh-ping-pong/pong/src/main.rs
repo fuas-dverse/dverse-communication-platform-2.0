@@ -2,6 +2,7 @@ use std::time::Duration;
 
 #[tokio::main]
 async fn main() {
+    zenoh::init_log_from_env_or("debug");
     let id = std::env::var("ID")
         .unwrap_or(String::default())
         .parse::<u32>()
@@ -12,7 +13,8 @@ async fn main() {
             zenoh::Config::from_file(config).unwrap_or(zenoh::Config::default())
         }
         Err(_) => {
-            println!("using default zenoh config");
+            println!("using default zenoh config - will use configuration file if available");
+            // Default to using the Config::default() and rely on config files
             zenoh::Config::default()
         }
     };
