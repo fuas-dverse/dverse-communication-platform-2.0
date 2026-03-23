@@ -54,3 +54,6 @@ You should see text on the console, meaning there is data exchange between the p
 
 Now you should not see any text coming from the ping and pong nodes. meaning no messages are exchanged.
 
+#### TLS not present in a part of the chain
+
+If TLS is not present in any part of the chain (omitting the -c flag on `1.`, or the `CONFIG_FILE` env variable, the demo should break.)
