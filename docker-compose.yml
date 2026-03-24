@@ -1,4 +1,14 @@
 services:
+  zenoh-router:
+    image: eclipse/zenoh:latest
+    container_name: chatapp-zenoh
+    ports:
+      - "7447:7447/tcp"
+      - "7447:7447/udp"
+      - "8000:8000/tcp"   # REST API (optional)
+    command: --rest-http-port 8000
+    restart: unless-stopped
+
   ollama:
     image: ollama/ollama
     container_name: chatapp-ollama

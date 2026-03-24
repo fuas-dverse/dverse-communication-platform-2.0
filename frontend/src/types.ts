@@ -1,4 +1,4 @@
-export type BotProvider = "claude" | "local"
+export type BotProvider = "claude" | "local" | "zenoh"
 export type BotPersonality = "assistant" | "coder" | "creative" | "analyst"
 
 export interface BotConfig {

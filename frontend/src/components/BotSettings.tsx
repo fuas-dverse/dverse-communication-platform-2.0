@@ -8,7 +8,7 @@ interface Props {
   onBotsChange: (bots: BotConfig[]) => void
 }
 
-const PROVIDERS: BotProvider[] = ["claude", "local"]
+const PROVIDERS: BotProvider[] = ["claude", "local", "zenoh"]
 const PERSONALITIES: BotPersonality[] = ["assistant", "coder", "creative", "analyst"]
 
 const personalityColors: Record<BotPersonality, string> = {
@@ -21,6 +21,7 @@ const personalityColors: Record<BotPersonality, string> = {
 const providerColors: Record<BotProvider, string> = {
   claude: "bg-indigo-900/50 text-indigo-300 border-indigo-700/50",
   local: "bg-gray-700/50 text-gray-300 border-gray-600/50",
+  zenoh: "bg-teal-900/50 text-teal-300 border-teal-700/50",
 }
 
 interface AddBotFormData {

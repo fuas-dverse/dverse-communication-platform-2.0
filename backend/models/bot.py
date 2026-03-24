@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict
 class BotProvider(str, Enum):
     CLAUDE = "claude"
     LOCAL = "local"
+    ZENOH = "zenoh"
 
 
 class BotPersonality(str, Enum):

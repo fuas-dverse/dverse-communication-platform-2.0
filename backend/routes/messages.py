@@ -207,12 +207,23 @@ async def _generate_bot_response(
             for row in history_rows
         ]
 
-        # Call LLM (runs in thread pool to avoid blocking event loop)
-        loop = asyncio.get_event_loop()
-        response_text = await loop.run_in_executor(
-            None,
-            lambda: build_bot_response(bot, triggering_message, history),
-        )
+        from ..models.bot import BotProvider
+        from ..services.zenoh_bridge import zenoh_bridge
+
+        if bot.provider == BotProvider.ZENOH:
+            response_text = await zenoh_bridge.request(
+                room_id=room_id,
+                bot_name=bot.name,
+                message=triggering_message,
+                history=history,
+                timeout=60.0,
+            )
+        else:
+            loop = asyncio.get_event_loop()
+            response_text = await loop.run_in_executor(
+                None,
+                lambda: build_bot_response(bot, triggering_message, history),
+            )
 
         # Update placeholder message with actual response
         db.execute(
