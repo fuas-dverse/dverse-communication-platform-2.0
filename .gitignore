@@ -23,3 +23,7 @@ certs/
 *.db
 *.db-shm
 *.db-wal
+venv/
+bin/
+target/
+certs/
