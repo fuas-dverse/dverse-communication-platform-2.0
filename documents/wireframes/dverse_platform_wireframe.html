@@ -1,0 +1,441 @@
+
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --sidebar-bg:#1a1d23;--sidebar-w:220px;--channel-bg:#21252e;--chat-bg:#282d38;
+    --input-bg:#1e2229;--accent:#5865f2;--accent2:#57f2b8;--text1:#e0e2ea;--text2:#9a9fad;--text3:#5f6478;
+    --border:#2e3240;--msg-hover:#2e3345;--agent-badge:#2dab7a;--human-badge:#5865f2;
+    --space-active:#5865f2;--notif:#ed4245;--tag:#3b8bd4;
+  }
+  body{background:transparent;font-family:var(--font-sans,system-ui,sans-serif);color:var(--text1);font-size:13px;line-height:1.5}
+  .shell{display:flex;height:620px;border-radius:12px;overflow:hidden;border:1px solid var(--border)}
+
+  /* ─── SPACES SIDEBAR ─── */
+  .spaces{width:64px;background:#111318;display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:6px;border-right:1px solid var(--border);flex-shrink:0}
+  .space-icon{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:500;cursor:pointer;transition:border-radius .15s,background .15s;position:relative;user-select:none}
+  .space-icon:hover{border-radius:14px;background:#2c3245}
+  .space-icon.active{border-radius:14px;background:var(--accent)}
+  .space-icon.active::before{content:'';position:absolute;left:-12px;width:4px;height:36px;background:var(--text1);border-radius:0 4px 4px 0}
+  .space-dot{position:absolute;bottom:1px;right:1px;width:10px;height:10px;background:var(--notif);border-radius:50%;border:2px solid #111318;font-size:8px;display:flex;align-items:center;justify-content:center;color:#fff}
+  .space-divider{width:32px;height:1px;background:var(--border);margin:2px 0}
+  .space-add{width:44px;height:44px;border-radius:50%;background:#1e2229;display:flex;align-items:center;justify-content:center;font-size:22px;color:var(--accent2);cursor:pointer;border:1.5px dashed var(--border)}
+  .space-add:hover{border-radius:14px;background:#2a3040}
+
+  /* ─── CHANNEL LIST ─── */
+  .channels{width:220px;background:var(--channel-bg);display:flex;flex-direction:column;border-right:1px solid var(--border);flex-shrink:0}
+  .ch-header{padding:14px 14px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+  .space-name{font-weight:500;font-size:14px;color:var(--text1)}
+  .ch-header-actions{display:flex;gap:6px}
+  .icon-btn{width:22px;height:22px;border-radius:6px;background:transparent;border:none;color:var(--text2);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px}
+  .icon-btn:hover{background:var(--msg-hover);color:var(--text1)}
+  .ch-scroll{flex:1;overflow-y:auto;padding:6px 0}
+  .ch-scroll::-webkit-scrollbar{width:3px}
+  .ch-scroll::-webkit-scrollbar-thumb{background:var(--border)}
+  .ch-section{padding:6px 14px 2px;font-size:11px;font-weight:500;color:var(--text3);letter-spacing:.06em;display:flex;align-items:center;justify-content:space-between;cursor:pointer;text-transform:uppercase}
+  .ch-section:hover .ch-plus{opacity:1}
+  .ch-plus{opacity:0;transition:opacity .1s;font-size:16px;color:var(--text2)}
+  .ch-item{padding:4px 14px;display:flex;align-items:center;gap:7px;cursor:pointer;border-radius:4px;margin:0 4px;color:var(--text2);font-size:13px;position:relative}
+  .ch-item:hover{background:var(--msg-hover);color:var(--text1)}
+  .ch-item.active{background:#3b3f52;color:var(--text1)}
+  .ch-item.unread{color:var(--text1);font-weight:500}
+  .ch-hash{font-size:16px;color:var(--text3);width:16px;text-align:center;flex-shrink:0}
+  .ch-badge{margin-left:auto;background:var(--notif);color:#fff;border-radius:8px;font-size:10px;padding:1px 5px;font-weight:500}
+  .ch-item.active .ch-badge{display:none}
+  .ch-pin{font-size:10px;color:var(--text3);margin-left:auto}
+
+  .member-item{padding:4px 14px;display:flex;align-items:center;gap:8px;cursor:pointer;border-radius:4px;margin:0 4px;color:var(--text2);font-size:13px}
+  .member-item:hover{background:var(--msg-hover);color:var(--text1)}
+  .avatar{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:500;flex-shrink:0;position:relative}
+  .avatar.bot{border-radius:8px}
+  .status-dot{width:8px;height:8px;border-radius:50%;position:absolute;bottom:-1px;right:-1px;border:2px solid var(--channel-bg)}
+  .status-online{background:#3ba55d}
+  .status-idle{background:#faa81a}
+  .status-bot{background:var(--agent-badge)}
+
+  .user-panel{padding:8px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px}
+  .user-panel .avatar{width:28px;height:28px;font-size:10px}
+  .user-info{flex:1;min-width:0}
+  .user-name{font-size:12px;font-weight:500;color:var(--text1)}
+  .user-status{font-size:11px;color:var(--text3)}
+  .user-actions{display:flex;gap:2px}
+
+  /* ─── MAIN CHAT ─── */
+  .chat{flex:1;display:flex;flex-direction:column;background:var(--chat-bg);min-width:0}
+  .chat-header{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0}
+  .chat-header .ch-hash{font-size:18px;color:var(--text2)}
+  .ch-title{font-weight:500;font-size:15px;color:var(--text1)}
+  .ch-desc{font-size:12px;color:var(--text3);padding-left:10px;border-left:1px solid var(--border);margin-left:4px}
+  .header-right{margin-left:auto;display:flex;align-items:center;gap:4px}
+  .hdr-btn{padding:4px 8px;border-radius:6px;border:none;background:transparent;color:var(--text2);cursor:pointer;font-size:12px;display:flex;align-items:center;gap:4px}
+  .hdr-btn:hover{background:var(--msg-hover);color:var(--text1)}
+  .pill{background:#3b3f52;border-radius:10px;padding:2px 8px;font-size:11px;color:var(--text2)}
+
+  .msgs{flex:1;overflow-y:auto;padding:16px 16px 0;display:flex;flex-direction:column;gap:0}
+  .msgs::-webkit-scrollbar{width:4px}
+  .msgs::-webkit-scrollbar-thumb{background:var(--border)}
+  .date-divider{text-align:center;font-size:11px;color:var(--text3);margin:12px 0;display:flex;align-items:center;gap:8px}
+  .date-divider::before,.date-divider::after{content:'';flex:1;height:1px;background:var(--border)}
+  .msg{padding:4px 8px;border-radius:6px;display:flex;gap:12px;cursor:default;position:relative}
+  .msg:hover{background:var(--msg-hover)}
+  .msg-avatar{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:500;flex-shrink:0;margin-top:2px}
+  .msg-avatar.bot{border-radius:10px}
+  .msg-body{flex:1;min-width:0}
+  .msg-meta{display:flex;align-items:center;gap:8px;margin-bottom:2px}
+  .msg-author{font-weight:500;font-size:14px}
+  .bot-tag{background:var(--agent-badge);color:#fff;border-radius:4px;font-size:10px;padding:1px 5px;font-weight:500}
+  .human-tag{background:var(--human-badge);color:#fff;border-radius:4px;font-size:10px;padding:1px 5px;font-weight:500}
+  .msg-time{font-size:11px;color:var(--text3)}
+  .msg-text{font-size:13px;color:var(--text2);line-height:1.55}
+  .msg-text .mention{color:var(--accent2);font-weight:500;cursor:pointer;background:rgba(87,242,184,.1);border-radius:3px;padding:0 2px}
+  .msg-text .mention:hover{background:rgba(87,242,184,.22)}
+  .msg-text .mention.agent-mention{color:#fff;background:rgba(45,171,122,.25);border-radius:3px;padding:0 3px}
+  .msg-text code{background:#1a1d23;border-radius:4px;padding:1px 5px;font-size:12px;color:#e06c75;font-family:var(--font-mono,monospace)}
+  .msg-continued{padding-left:56px}
+  .msg-continued .msg-text{font-size:13px;color:var(--text2)}
+
+  .agent-response{background:#1e2d28;border-radius:8px;padding:10px 12px;margin:4px 0;border-left:3px solid var(--agent-badge)}
+  .agent-header{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+  .agent-model-pill{background:#163524;color:var(--accent2);border-radius:6px;font-size:10px;padding:2px 7px;font-weight:500}
+  .agent-text{font-size:13px;color:var(--text2);line-height:1.6}
+  .agent-sources{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+  .source-chip{background:#1a2c23;border:1px solid #2a4035;border-radius:6px;padding:2px 8px;font-size:11px;color:var(--accent2);cursor:pointer}
+  .source-chip:hover{background:#253830}
+
+  .typing{padding:0 16px 10px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text3)}
+  .typing-dots{display:flex;gap:3px}
+  .typing-dot{width:5px;height:5px;border-radius:50%;background:var(--text3);animation:typingBounce 1.2s infinite}
+  .typing-dot:nth-child(2){animation-delay:.2s}
+  .typing-dot:nth-child(3){animation-delay:.4s}
+  @keyframes typingBounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-4px)}}
+
+  .input-area{padding:12px 16px;border-top:1px solid var(--border)}
+  .input-box{background:var(--input-bg);border-radius:10px;border:1px solid var(--border);display:flex;align-items:flex-end;gap:8px;padding:8px 10px}
+  .input-box:focus-within{border-color:#4a4f6a}
+  .input-left{display:flex;gap:4px;align-items:center}
+  .inp-btn{width:26px;height:26px;border-radius:6px;border:none;background:transparent;color:var(--text3);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center}
+  .inp-btn:hover{background:#2e3345;color:var(--text2)}
+  .input-field{flex:1;background:transparent;border:none;outline:none;color:var(--text1);font-size:13px;resize:none;line-height:1.5;min-height:20px;max-height:120px;font-family:inherit}
+  .input-field::placeholder{color:var(--text3)}
+  .input-right{display:flex;gap:4px;align-items:center}
+  .send-btn{width:28px;height:28px;border-radius:7px;background:var(--accent);border:none;color:#fff;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center}
+  .send-btn:hover{background:#4752c4}
+  .agent-hint{font-size:11px;color:var(--text3);margin-top:5px;padding:0 2px}
+  .agent-hint span{color:var(--accent2);font-weight:500}
+
+  /* ─── MEMBERS PANEL ─── */
+  .members{width:220px;background:var(--channel-bg);border-left:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+  .mb-header{padding:14px 14px 10px;border-bottom:1px solid var(--border);font-weight:500;font-size:14px;color:var(--text1);display:flex;align-items:center;justify-content:space-between}
+  .mb-scroll{flex:1;overflow-y:auto;padding:8px 0}
+  .mb-scroll::-webkit-scrollbar{width:3px}
+  .mb-scroll::-webkit-scrollbar-thumb{background:var(--border)}
+  .mb-section{padding:6px 14px 4px;font-size:11px;font-weight:500;color:var(--text3);letter-spacing:.06em;text-transform:uppercase}
+  .mb-item{padding:5px 14px;display:flex;align-items:center;gap:9px;cursor:pointer}
+  .mb-item:hover{background:var(--msg-hover)}
+  .mb-name{font-size:13px;color:var(--text2)}
+  .mb-item:hover .mb-name{color:var(--text1)}
+  .mb-role{font-size:10px;padding:1px 5px;border-radius:4px;margin-left:auto;flex-shrink:0}
+  .role-owner{background:#444;color:var(--text2)}
+  .role-mod{background:#2d3a5a;color:#7289da}
+  .role-bot{background:#163524;color:var(--accent2)}
+  .mb-desc{font-size:11px;color:var(--text3);padding:0 14px 4px;line-height:1.4}
+
+  /* ─── NOTIFICATION BADGE overlay ─── */
+  .notif-preview{position:absolute;top:6px;right:6px;background:var(--notif);border-radius:50%;width:16px;height:16px;font-size:9px;font-weight:500;color:#fff;display:flex;align-items:center;justify-content:center;border:2px solid var(--channel-bg)}
+
+  /* ─── ANNOTATION LAYER ─── */
+  .annotation{display:inline-flex;align-items:center;gap:4px;background:#2a1a3a;border:1px solid #5865f2;border-radius:6px;font-size:10px;color:#a0a8f8;padding:2px 7px;margin:2px}
+  .ann-num{width:14px;height:14px;background:var(--accent);border-radius:50%;font-size:9px;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:500;flex-shrink:0}
+
+  /* Tabs in header */
+  .ch-tabs{display:flex;gap:0;border-bottom:1px solid var(--border);padding:0 16px}
+  .ch-tab{padding:8px 14px;font-size:12px;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .ch-tab.active{color:var(--text1);border-bottom-color:var(--accent)}
+  .ch-tab:hover:not(.active){color:var(--text1)}
+</style>
+
+<div style="padding:0 0 12px">
+  <!-- Annotation legend -->
+  <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;padding:0 2px">
+    <span class="annotation"><span class="ann-num">1</span>Spaces (like Matrix Spaces)</span>
+    <span class="annotation"><span class="ann-num">2</span>Channels within space</span>
+    <span class="annotation"><span class="ann-num">3</span>AI Agent tagging (@agent)</span>
+    <span class="annotation"><span class="ann-num">4</span>Agent response card</span>
+    <span class="annotation"><span class="ann-num">5</span>Members + agents panel</span>
+  </div>
+
+  <!-- MAIN SHELL -->
+  <div class="shell">
+    <!-- 1. SPACES RAIL -->
+    <div class="spaces">
+      <div class="space-icon active" title="DVerse Research Space">DV</div>
+      <div class="space-icon" title="Game Dev Space" style="background:#2d1f3d;font-size:12px">🎮</div>
+      <div class="space-icon" title="IXD Group" style="font-size:12px;background:#1f2d2a">IXD<span class="space-dot">3</span></div>
+      <div class="space-icon" title="Matrix Bridge" style="font-size:12px;background:#1a2030">M</div>
+      <div class="space-divider"></div>
+      <div class="space-add">+</div>
+    </div>
+
+    <!-- 2. CHANNELS LIST -->
+    <div class="channels">
+      <div class="ch-header">
+        <span class="space-name">DVerse Platform</span>
+        <div class="ch-header-actions">
+          <button class="icon-btn" title="Settings">⚙</button>
+          <button class="icon-btn" title="New Channel">+</button>
+        </div>
+      </div>
+      <div class="ch-scroll">
+        <div class="ch-section">Text Channels <span class="ch-plus">+</span></div>
+        <div class="ch-item active">
+          <span class="ch-hash">#</span>general
+        </div>
+        <div class="ch-item unread">
+          <span class="ch-hash">#</span>architecture<span class="ch-badge">4</span>
+        </div>
+        <div class="ch-item">
+          <span class="ch-hash">#</span>pub-sub-design
+        </div>
+        <div class="ch-item">
+          <span class="ch-hash">#</span>ai-experiments
+        </div>
+        <div class="ch-item unread">
+          <span class="ch-hash">#</span>fediverse-bridge<span class="ch-badge">1</span>
+        </div>
+        <div class="ch-item">
+          <span class="ch-hash">#</span>announcements<span class="ch-pin">📌</span>
+        </div>
+
+        <div class="ch-section" style="margin-top:6px">Agent Rooms <span class="ch-plus">+</span></div>
+        <div class="ch-item" style="color:var(--accent2)">
+          <span class="ch-hash" style="color:var(--agent-badge)">◈</span>mentor-bot
+        </div>
+        <div class="ch-item" style="color:var(--accent2)">
+          <span class="ch-hash" style="color:var(--agent-badge)">◈</span>survey-agent
+        </div>
+        <div class="ch-item" style="color:var(--accent2)">
+          <span class="ch-hash" style="color:var(--agent-badge)">◈</span>code-review-bot
+        </div>
+
+        <div class="ch-section" style="margin-top:6px">Voice / Sessions <span class="ch-plus">+</span></div>
+        <div class="ch-item" style="font-size:12px">
+          <span style="font-size:13px;color:var(--text3)">▶</span>Workshop Room
+        </div>
+        <div class="ch-item" style="font-size:12px">
+          <span style="font-size:13px;color:var(--text3)">▶</span>Co-create Session
+        </div>
+      </div>
+      <div class="user-panel">
+        <div class="avatar" style="background:#3b2f6e;color:#a99ef0">YU</div>
+        <div class="user-info">
+          <div class="user-name">you</div>
+          <div class="user-status">● Online</div>
+        </div>
+        <div class="user-actions">
+          <button class="icon-btn" title="Mute">🎤</button>
+          <button class="icon-btn" title="Settings">⚙</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. MAIN CHAT AREA -->
+    <div class="chat">
+      <div class="chat-header">
+        <span class="ch-hash">#</span>
+        <span class="ch-title">general</span>
+        <span class="ch-desc">Main discussion — DVerse Platform build</span>
+        <div class="header-right">
+          <button class="hdr-btn">🔍 Search</button>
+          <button class="hdr-btn">📌 Pins</button>
+          <button class="hdr-btn">👥 <span class="pill">7</span></button>
+          <button class="hdr-btn">⚙</button>
+        </div>
+      </div>
+
+      <div class="ch-tabs">
+        <div class="ch-tab active">Messages</div>
+        <div class="ch-tab">Threads</div>
+        <div class="ch-tab">Pinned</div>
+        <div class="ch-tab">Agents</div>
+      </div>
+
+      <div class="msgs">
+        <div class="date-divider">Today</div>
+
+        <!-- Human message -->
+        <div class="msg">
+          <div class="msg-avatar" style="background:#3b2f6e;color:#a99ef0">MvG</div>
+          <div class="msg-body">
+            <div class="msg-meta">
+              <span class="msg-author" style="color:#a99ef0">Marc van Grootel</span>
+              <span class="human-tag">Owner</span>
+              <span class="msg-time">09:12</span>
+            </div>
+            <div class="msg-text">Morning team! Today we need to decide on the pub-sub stack. Both NATS and Zenoh are viable — let's run a quick analysis. <span class="mention">@survey-agent</span> can you set up a structured vote on this?</div>
+          </div>
+        </div>
+
+        <!-- Agent response -->
+        <div class="msg">
+          <div class="msg-avatar bot" style="background:#163524;color:#57f2b8">SA</div>
+          <div class="msg-body">
+            <div class="msg-meta">
+              <span class="msg-author" style="color:#57f2b8">survey-agent</span>
+              <span class="bot-tag">AI Agent</span>
+              <span class="msg-time">09:12</span>
+            </div>
+            <div class="agent-response">
+              <div class="agent-header">
+                <span style="color:var(--accent2);font-size:12px;font-weight:500">survey-agent</span>
+                <span class="agent-model-pill">DVerse Agent v0.3</span>
+              </div>
+              <div class="agent-text">
+                Sure! I've created a structured vote. React to this message:<br>
+                🔵 <strong style="color:var(--text1)">NATS (Python)</strong> — Conservative, familiar stack<br>
+                🟣 <strong style="color:var(--text1)">Zenoh (Rust)</strong> — Adventurous, high-performance<br><br>
+                I'll tally results in 30 min and post a summary here.
+              </div>
+              <div class="agent-sources">
+                <span class="source-chip">📊 View live results</span>
+                <span class="source-chip">📋 Architecture notes</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Human reply, continued thread feel -->
+        <div class="msg" style="margin-top:6px">
+          <div class="msg-avatar" style="background:#1f2d4a;color:#7da7e0">AK</div>
+          <div class="msg-body">
+            <div class="msg-meta">
+              <span class="msg-author" style="color:#7da7e0">alex.kim</span>
+              <span class="msg-time">09:18</span>
+            </div>
+            <div class="msg-text">Voted 🟣 Zenoh. Also — <span class="mention agent-mention">@mentor-bot</span> what are the trade-offs between Zenoh and NATS for a pub-sub architecture at our scale?</div>
+          </div>
+        </div>
+
+        <!-- Agent: mentor-bot -->
+        <div class="msg">
+          <div class="msg-avatar bot" style="background:#1a1f3a;color:#7289da">MB</div>
+          <div class="msg-body">
+            <div class="msg-meta">
+              <span class="msg-author" style="color:#7289da">mentor-bot</span>
+              <span class="bot-tag">AI Agent</span>
+              <span class="msg-time">09:18</span>
+            </div>
+            <div class="agent-response" style="border-left-color:#7289da;background:#1e202e">
+              <div class="agent-header">
+                <span style="color:#7289da;font-size:12px;font-weight:500">mentor-bot</span>
+                <span class="agent-model-pill" style="background:#1a1d30;color:#7289da">GPT-wrapper · edu mode</span>
+              </div>
+              <div class="agent-text">
+                Great question <span class="mention">@alex.kim</span>! Here's a quick comparison:<br><br>
+                <strong style="color:var(--text1)">NATS</strong> — Mature, battle-tested, great Python SDK. Lower learning curve. Best for projects prioritising delivery speed.<br>
+                <strong style="color:var(--text1)">Zenoh</strong> — Rust-native, peer-to-peer capable, no central broker needed. Higher throughput. Steeper learning curve but valuable for distributed mesh scenarios like DVerse.<br><br>
+                Given your <code>Bevy ECS</code> game integration requirement, Zenoh's decentralised model may fit better.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Another human -->
+        <div class="msg" style="margin-top:6px">
+          <div class="msg-avatar" style="background:#2d1a1a;color:#e07d7d">SR</div>
+          <div class="msg-body">
+            <div class="msg-meta">
+              <span class="msg-author" style="color:#e07d7d">sara.r</span>
+              <span class="msg-time">09:24</span>
+            </div>
+            <div class="msg-text">This is super helpful. I'll start a thread on migration risks 👆 Also pinging <span class="mention agent-mention">@code-review-bot</span> to audit the current Python codebase before we decide.</div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Typing indicator -->
+      <div class="typing">
+        <div class="msg-avatar bot" style="width:20px;height:20px;background:#163524;color:#57f2b8;border-radius:6px;font-size:8px">SA</div>
+        <div class="typing-dots">
+          <div class="typing-dot"></div>
+          <div class="typing-dot"></div>
+          <div class="typing-dot"></div>
+        </div>
+        <span>survey-agent is updating the vote tally…</span>
+      </div>
+
+      <!-- Input area -->
+      <div class="input-area">
+        <div class="input-box">
+          <div class="input-left">
+            <button class="inp-btn" title="Attach file">📎</button>
+            <button class="inp-btn" title="Emoji">😊</button>
+          </div>
+          <textarea class="input-field" rows="1" placeholder="Message #general — or type @agentname to invoke an AI agent"></textarea>
+          <div class="input-right">
+            <button class="inp-btn" title="Format">Aa</button>
+            <button class="send-btn" title="Send">➤</button>
+          </div>
+        </div>
+        <div class="agent-hint">Tip: Start your message with <span>@mentor-bot</span>, <span>@survey-agent</span>, or <span>@code-review-bot</span> to invoke an AI agent</div>
+      </div>
+    </div>
+
+    <!-- 5. MEMBERS PANEL -->
+    <div class="members">
+      <div class="mb-header">
+        Members <span style="font-size:12px;font-weight:400;color:var(--text3)">7 online</span>
+      </div>
+      <div class="mb-scroll">
+        <div class="mb-section">AI Agents — 3</div>
+        <div class="mb-item">
+          <div class="avatar bot" style="background:#163524;color:#57f2b8">SA<div class="status-dot status-bot"></div></div>
+          <span class="mb-name" style="color:var(--accent2)">survey-agent</span>
+          <span class="mb-role role-bot">bot</span>
+        </div>
+        <div class="mb-desc">Runs polls &amp; structured votes</div>
+        <div class="mb-item">
+          <div class="avatar bot" style="background:#1a1f3a;color:#7289da">MB<div class="status-dot status-bot"></div></div>
+          <span class="mb-name" style="color:#7289da">mentor-bot</span>
+          <span class="mb-role role-bot">bot</span>
+        </div>
+        <div class="mb-desc">Educational assistant, explains concepts</div>
+        <div class="mb-item">
+          <div class="avatar bot" style="background:#2d1a1a;color:#e07d7d">CR<div class="status-dot status-bot"></div></div>
+          <span class="mb-name" style="color:#e07d7d">code-review-bot</span>
+          <span class="mb-role role-bot">bot</span>
+        </div>
+        <div class="mb-desc">Reviews PRs, audits code quality</div>
+
+        <div class="mb-section" style="margin-top:8px">Humans — 4 online</div>
+        <div class="mb-item">
+          <div class="avatar" style="background:#3b2f6e;color:#a99ef0">MvG<div class="status-dot status-online"></div></div>
+          <span class="mb-name">Marc van Grootel</span>
+          <span class="mb-role role-owner">owner</span>
+        </div>
+        <div class="mb-item">
+          <div class="avatar" style="background:#1f2d4a;color:#7da7e0">AK<div class="status-dot status-online"></div></div>
+          <span class="mb-name">alex.kim</span>
+          <span class="mb-role role-mod">mod</span>
+        </div>
+        <div class="mb-item">
+          <div class="avatar" style="background:#2d1a1a;color:#e07d7d">SR<div class="status-dot status-online"></div></div>
+          <span class="mb-name">sara.r</span>
+        </div>
+        <div class="mb-item">
+          <div class="avatar" style="background:#1a2d1a;color:#7dc87d">JL<div class="status-dot status-online"></div></div>
+          <span class="mb-name">j.liu</span>
+        </div>
+
+        <div class="mb-section" style="margin-top:8px">Offline — 2</div>
+        <div class="mb-item" style="opacity:.5">
+          <div class="avatar" style="background:#222;color:#666">TP</div>
+          <span class="mb-name" style="color:var(--text3)">tom.p</span>
+        </div>
+        <div class="mb-item" style="opacity:.5">
+          <div class="avatar" style="background:#222;color:#666">NB</div>
+          <span class="mb-name" style="color:var(--text3)">nina.b</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
