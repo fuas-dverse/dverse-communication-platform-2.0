@@ -1,5 +1,5 @@
-export type BotProvider = "claude" | "local" | "zenoh"
-export type BotPersonality = "assistant" | "coder" | "creative" | "analyst"
+export type BotProvider = 'claude' | 'local' | 'zenoh'
+export type BotPersonality = 'assistant' | 'coder' | 'creative' | 'analyst'
 
 export interface BotConfig {
   id: string
@@ -28,6 +28,7 @@ export interface Room {
   id: string
   name: string
   description: string
+  server_id: string | null
   created_by: string
   created_at: string
   bots: BotConfig[]
@@ -55,4 +56,22 @@ export interface AuthResponse {
   access_token: string
   token_type: string
   user: User
+}
+
+export interface Server {
+  id: string
+  name: string
+  description: string
+  created_by: string
+  created_at: string
+  member_count: number
+  invite_code: string | null
+}
+
+export interface ServerMember {
+  user_id: string
+  username: string
+  joined_at: string
+  is_online: boolean
+  last_seen: string
 }

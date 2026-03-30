@@ -2,6 +2,7 @@ import asyncio
 import json
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
@@ -18,6 +19,10 @@ GLOBAL_CHANNEL = "__global__"
 router = APIRouter()
 
 
+def _server_channel(server_id: str) -> str:
+    return f"server:{server_id}"
+
+
 def _get_bots_for_room(db, room_id: str) -> list[BotConfig]:
     rows = db.execute(
         "SELECT * FROM room_bots WHERE room_id = ? ORDER BY created_at ASC",
@@ -28,12 +33,14 @@ def _get_bots_for_room(db, room_id: str) -> list[BotConfig]:
 
 def _row_to_room(db, row) -> Room:
     bots = _get_bots_for_room(db, row["id"])
+    data = dict(row)
     return Room(
-        id=row["id"],
-        name=row["name"],
-        description=row["description"] or "",
-        created_by=row["created_by"],
-        created_at=row["created_at"],
+        id=data["id"],
+        name=data["name"],
+        description=data.get("description") or "",
+        server_id=data.get("server_id"),
+        created_by=data["created_by"],
+        created_at=data["created_at"],
         bots=bots,
     )
 
@@ -61,17 +68,36 @@ async def stream_rooms(request: Request, current_user: User = Depends(get_curren
 
 
 @router.get("/", response_model=list[Room])
-def list_rooms(current_user: User = Depends(get_current_user)):
+def list_rooms(
+    server_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
     db = get_db()
-    rows = db.execute(
-        "SELECT * FROM rooms ORDER BY created_at DESC"
-    ).fetchall()
+    if server_id:
+        rows = db.execute(
+            "SELECT * FROM rooms WHERE server_id = ? ORDER BY created_at ASC",
+            (server_id,),
+        ).fetchall()
+    else:
+        rows = db.execute("SELECT * FROM rooms ORDER BY created_at DESC").fetchall()
     return [_row_to_room(db, row) for row in rows]
 
 
 @router.post("/", response_model=Room, status_code=status.HTTP_201_CREATED)
 async def create_room(body: RoomCreate, current_user: User = Depends(get_current_user)):
     db = get_db()
+
+    # Verify server membership if server_id provided
+    if body.server_id:
+        member_check = db.execute(
+            "SELECT 1 FROM server_members WHERE server_id = ? AND user_id = ?",
+            (body.server_id, current_user.id),
+        ).fetchone()
+        if not member_check:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not a member of this server",
+            )
 
     existing = db.execute("SELECT id FROM rooms WHERE name = ?", (body.name,)).fetchone()
     if existing:
@@ -84,8 +110,8 @@ async def create_room(body: RoomCreate, current_user: User = Depends(get_current
     created_at = datetime.utcnow().isoformat() + "Z"
 
     db.execute(
-        "INSERT INTO rooms (id, name, description, created_by, created_at) VALUES (?, ?, ?, ?, ?)",
-        (room_id, body.name, body.description, current_user.id, created_at),
+        "INSERT INTO rooms (id, name, description, created_by, created_at, server_id) VALUES (?, ?, ?, ?, ?, ?)",
+        (room_id, body.name, body.description, current_user.id, created_at, body.server_id),
     )
     db.commit()
 
@@ -93,11 +119,18 @@ async def create_room(body: RoomCreate, current_user: User = Depends(get_current
         id=room_id,
         name=body.name,
         description=body.description,
+        server_id=body.server_id,
         created_by=current_user.id,
         created_at=created_at,
         bots=[],
     )
-    await broker.publish(GLOBAL_CHANNEL, {"type": "room_created", "room": room.model_dump()})
+
+    payload = {"type": "room_created", "room": room.model_dump()}
+    # Broadcast to server channel (if server-scoped) and global
+    if body.server_id:
+        await broker.publish(_server_channel(body.server_id), payload)
+    await broker.publish(GLOBAL_CHANNEL, payload)
+
     return room
 
 
@@ -187,10 +220,7 @@ def update_bot(
     db.execute(f"UPDATE room_bots SET {set_clauses} WHERE id = ?", values)
     db.commit()
 
-    updated_row = db.execute(
-        "SELECT * FROM room_bots WHERE id = ?", (bot_id,)
-    ).fetchone()
-
+    updated_row = db.execute("SELECT * FROM room_bots WHERE id = ?", (bot_id,)).fetchone()
     return BotConfig(**dict(updated_row))
 
 

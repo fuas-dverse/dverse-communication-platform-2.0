@@ -8,6 +8,8 @@ services:
       - "8000:8000/tcp"   # REST API (optional)
     command: --rest-http-port 8000
     restart: unless-stopped
+    networks:
+      - chatapp
 
   ollama:
     image: ollama/ollama
@@ -17,6 +19,8 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     restart: unless-stopped
+    networks:
+      - chatapp
 
     # ── GPU support (uncomment if you have an NVIDIA GPU) ──────────────────────
     # deploy:
@@ -29,3 +33,7 @@ services:
 
 volumes:
   ollama_data:
+
+networks:
+  chatapp:
+    driver: bridge

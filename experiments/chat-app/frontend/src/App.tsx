@@ -2,8 +2,7 @@ import { Routes, Route, Navigate } from "react-router-dom"
 import { AuthProvider, useAuth } from "./store/auth"
 import LoginPage from "./pages/LoginPage"
 import RegisterPage from "./pages/RegisterPage"
-import RoomsPage from "./pages/RoomsPage"
-import ChatRoomPage from "./pages/ChatRoomPage"
+import MainPage from "./pages/MainPage"
 import type { ReactNode } from "react"
 
 function ProtectedRoute({ children }: { children: ReactNode }) {
@@ -11,8 +10,8 @@ function ProtectedRoute({ children }: { children: ReactNode }) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-900">
-        <div className="text-gray-400 text-lg">Loading...</div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#1a1d23" }}>
+        <div style={{ color: "#9a9fad" }}>Loading...</div>
       </div>
     )
   }
@@ -34,7 +33,7 @@ function AppRoutes() {
         path="/rooms"
         element={
           <ProtectedRoute>
-            <RoomsPage />
+            <MainPage />
           </ProtectedRoute>
         }
       />
@@ -42,7 +41,7 @@ function AppRoutes() {
         path="/rooms/:id"
         element={
           <ProtectedRoute>
-            <ChatRoomPage />
+            <MainPage />
           </ProtectedRoute>
         }
       />

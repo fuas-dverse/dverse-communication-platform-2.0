@@ -4,18 +4,25 @@
 
 @layer base {
   body {
-    @apply bg-gray-900 text-white;
+    background: #282d38;
+    color: #e0e2ea;
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  * {
+    box-sizing: border-box;
   }
 }
 
 @layer utilities {
   .scrollbar-thin {
     scrollbar-width: thin;
-    scrollbar-color: rgb(75 85 99) transparent;
+    scrollbar-color: #2e3240 transparent;
   }
 
   .scrollbar-thin::-webkit-scrollbar {
-    width: 6px;
+    width: 4px;
   }
 
   .scrollbar-thin::-webkit-scrollbar-track {
@@ -23,7 +30,16 @@
   }
 
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: rgb(75 85 99);
+    background-color: #2e3240;
     border-radius: 3px;
   }
+}
+
+@keyframes typingBounce {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-4px); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }

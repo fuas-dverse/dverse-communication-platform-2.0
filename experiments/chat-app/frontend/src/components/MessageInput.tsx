@@ -5,35 +5,40 @@ import {
   type KeyboardEvent,
   type ChangeEvent,
 } from "react"
+import { Icon } from "@iconify/react"
 
 interface Props {
   onSend: (content: string) => Promise<void>
   disabled?: boolean
+  placeholder?: string
+  botNames?: string[]
 }
 
-export default function MessageInput({ onSend, disabled }: Props) {
+export default function MessageInput({
+  onSend,
+  disabled,
+  placeholder = "Type a message…",
+  botNames = [],
+}: Props) {
   const [value, setValue] = useState("")
   const [sending, setSending] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const isSending = sending || disabled
-  const showBotHint = value.startsWith("@")
+  const canSend = value.trim().length > 0 && !isSending
 
   function autoResize() {
     const el = textareaRef.current
     if (!el) return
     el.style.height = "auto"
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`
   }
 
-  useEffect(() => {
-    autoResize()
-  }, [value])
+  useEffect(() => { autoResize() }, [value])
 
   async function handleSend() {
     const trimmed = value.trim()
     if (!trimmed || isSending) return
-
     setSending(true)
     try {
       await onSend(trimmed)
@@ -44,10 +49,6 @@ export default function MessageInput({ onSend, disabled }: Props) {
     }
   }
 
-  function handleChange(e: ChangeEvent<HTMLTextAreaElement>) {
-    setValue(e.target.value)
-  }
-
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
@@ -56,60 +57,109 @@ export default function MessageInput({ onSend, disabled }: Props) {
   }
 
   return (
-    <div className="border-t border-gray-700 bg-gray-900 px-4 py-3">
-      {showBotHint && (
-        <div className="mb-2 text-xs text-indigo-400 flex items-center gap-1.5">
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          Bot will respond to your message
+    <div style={{ padding: "12px 16px", borderTop: "1px solid #2e3240", flexShrink: 0 }}>
+      <div
+        style={{
+          background: "#1e2229",
+          borderRadius: "10px",
+          border: "1px solid #2e3240",
+          display: "flex",
+          alignItems: "flex-end",
+          gap: "8px",
+          padding: "8px 10px",
+        }}
+        onFocus={(e) => (e.currentTarget.style.borderColor = "#4a4f6a")}
+        onBlur={(e) => (e.currentTarget.style.borderColor = "#2e3240")}
+      >
+        {/* Left buttons */}
+        <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+          <InpBtn title="Attach file"><Icon icon="lucide:paperclip" style={{ fontSize: "15px" }} /></InpBtn>
+          <InpBtn title="Emoji"><Icon icon="lucide:smile" style={{ fontSize: "15px" }} /></InpBtn>
         </div>
-      )}
-      <div className="flex items-end gap-3">
+
+        {/* Textarea */}
         <textarea
           ref={textareaRef}
           value={value}
-          onChange={handleChange}
+          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          disabled={isSending}
+          disabled={!!isSending}
           rows={1}
-          placeholder="Type a message... (Shift+Enter for newline)"
-          className="flex-1 bg-gray-800 border border-gray-700 focus:border-indigo-500 text-white rounded-xl px-4 py-3 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-indigo-500 placeholder-gray-500 transition scrollbar-thin disabled:opacity-60 disabled:cursor-not-allowed"
+          placeholder={placeholder}
+          style={{
+            flex: 1,
+            background: "transparent",
+            border: "none",
+            outline: "none",
+            color: "#e0e2ea",
+            fontSize: "13px",
+            resize: "none",
+            lineHeight: "1.5",
+            minHeight: "20px",
+            maxHeight: "120px",
+            fontFamily: "inherit",
+          }}
         />
-        <button
-          onClick={handleSend}
-          disabled={!value.trim() || isSending}
-          className="flex-shrink-0 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white rounded-xl px-4 py-3 transition flex items-center justify-center"
-          aria-label="Send message"
-        >
-          {sending ? (
-            <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle
-                className="opacity-25"
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                strokeWidth="4"
-              />
-              <path
-                className="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-              />
-            </svg>
-          ) : (
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-              />
-            </svg>
-          )}
-        </button>
+
+        {/* Right buttons */}
+        <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+          <InpBtn title="Format text"><Icon icon="lucide:type" style={{ fontSize: "14px" }} /></InpBtn>
+          <button
+            onClick={handleSend}
+            disabled={!canSend}
+            title="Send message"
+            style={{
+              width: "28px",
+              height: "28px",
+              borderRadius: "7px",
+              background: canSend ? "#5865f2" : "#2e3345",
+              border: "none",
+              color: canSend ? "#fff" : "#5f6478",
+              cursor: canSend ? "pointer" : "default",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              transition: "background 0.1s",
+              flexShrink: 0,
+            }}
+          >
+            <Icon icon="lucide:send-horizontal" style={{ fontSize: "14px" }} />
+          </button>
+        </div>
       </div>
+
+      {/* Bot hint */}
+      {botNames.length > 0 && (
+        <div style={{ fontSize: "11px", color: "#5f6478", marginTop: "5px", padding: "0 2px" }}>
+          Tip: Start with{" "}
+          {botNames.map((name, i) => (
+            <span key={name}>
+              <span style={{ color: "#57f2b8", fontWeight: "500" }}>@{name}</span>
+              {i < botNames.length - 1 ? ", " : ""}
+            </span>
+          ))}{" "}
+          to invoke an AI agent
+        </div>
+      )}
     </div>
+  )
+}
+
+function InpBtn({ children, title }: { children: React.ReactNode; title: string }) {
+  return (
+    <button
+      title={title}
+      style={{
+        width: "26px", height: "26px", borderRadius: "6px",
+        border: "none", background: "transparent",
+        color: "#5f6478", cursor: "pointer",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        flexShrink: 0,
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = "#2e3345"; e.currentTarget.style.color = "#9a9fad" }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#5f6478" }}
+    >
+      {children}
+    </button>
   )
 }

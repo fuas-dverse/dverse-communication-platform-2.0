@@ -1,13 +1,15 @@
 import { apiFetch } from "./client"
 import type { Room, BotConfig, BotConfigCreate, BotConfigUpdate } from "../types"
 
-export async function getRooms(): Promise<Room[]> {
-  return apiFetch<Room[]>("/rooms")
+export async function getRooms(serverId?: string): Promise<Room[]> {
+  const url = serverId ? `/rooms?server_id=${encodeURIComponent(serverId)}` : "/rooms"
+  return apiFetch<Room[]>(url)
 }
 
 export async function createRoom(data: {
   name: string
   description: string
+  server_id?: string | null
 }): Promise<Room> {
   return apiFetch<Room>("/rooms", {
     method: "POST",
