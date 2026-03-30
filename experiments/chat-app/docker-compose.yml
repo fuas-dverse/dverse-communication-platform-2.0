@@ -5,7 +5,7 @@ services:
     ports:
       - "7447:7447/tcp"
       - "7447:7447/udp"
-      - "8000:8000/tcp"   # REST API (optional)
+      - "8000:8000/tcp" # REST API (optional)
     command: --rest-http-port 8000
     restart: unless-stopped
     networks:
