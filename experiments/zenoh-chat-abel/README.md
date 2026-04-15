@@ -1,4 +1,4 @@
-﻿# 🛰️ Zenoh Chat Experiment (Rust)
+﻿# Zenoh Chat Experiment (Rust)
 
 A lightweight peer-to-peer terminal chat application built with **Rust**, **Zenoh**, and **Tokio**. This project demonstrates real-time distributed messaging with rate limiting, validation, and async concurrency.
 
