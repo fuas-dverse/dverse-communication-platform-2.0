@@ -66,7 +66,7 @@ Then restart your terminal.
 
 ```
 git clone https://github.com/fuas-dverse/dverse-communication-platform-2.0.git
-cd feature/zenoh-chat-abel
+cd dverse-communication-platform-2.0
 ```
 
 ----------
