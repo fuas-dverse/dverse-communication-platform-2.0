@@ -1,0 +1,272 @@
+
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#1a1d23;--surface:#21252e;--surface2:#282d38;--border:#2e3240;
+    --text1:#e0e2ea;--text2:#9a9fad;--text3:#5f6478;
+    --accent:#5865f2;--accent2:#57f2b8;--agent:#2dab7a;--warn:#faa81a;--danger:#ed4245;
+    --msg-hover:#2e3345;
+  }
+  body{background:transparent;font-family:var(--font-sans,system-ui,sans-serif);color:var(--text1);font-size:13px}
+  .row{display:flex;gap:16px;align-items:flex-start}
+  .panel{background:var(--surface);border-radius:12px;border:1px solid var(--border);overflow:hidden;flex:1}
+  .panel-hdr{padding:12px 16px;border-bottom:1px solid var(--border);font-weight:500;font-size:14px;color:var(--text1);display:flex;align-items:center;justify-content:space-between}
+  .hdr-actions{display:flex;gap:6px}
+  .hdr-btn{padding:3px 9px;border-radius:6px;font-size:11px;background:transparent;border:1px solid var(--border);color:var(--text2);cursor:pointer}
+  .hdr-btn:hover{background:var(--msg-hover);color:var(--text1)}
+  .hdr-btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+
+  /* NOTIFICATIONS */
+  .notif-tabs{display:flex;border-bottom:1px solid var(--border)}
+  .ntab{padding:8px 14px;font-size:12px;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .ntab.active{color:var(--text1);border-bottom-color:var(--accent)}
+  .notif-list{max-height:360px;overflow-y:auto}
+  .notif-list::-webkit-scrollbar{width:3px}
+  .notif-list::-webkit-scrollbar-thumb{background:var(--border)}
+  .notif-item{display:flex;gap:10px;padding:10px 14px;border-bottom:1px solid #1e2230;cursor:pointer;position:relative}
+  .notif-item:hover{background:var(--msg-hover)}
+  .notif-item.unread::after{content:'';position:absolute;left:4px;top:50%;transform:translateY(-50%);width:6px;height:6px;background:var(--accent);border-radius:50%}
+  .notif-icon{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;flex-shrink:0}
+  .notif-icon.bot{border-radius:10px}
+  .notif-body{flex:1;min-width:0}
+  .notif-title{font-size:13px;font-weight:500;color:var(--text1);margin-bottom:2px}
+  .notif-title .space{color:var(--text2);font-weight:400;font-size:12px}
+  .notif-preview{font-size:12px;color:var(--text2);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .notif-time{font-size:11px;color:var(--text3);flex-shrink:0;padding-top:1px}
+  .notif-mention-chip{background:rgba(88,101,242,.18);color:#a0a8f8;border-radius:4px;font-size:10px;padding:1px 5px;font-weight:500;margin-right:4px}
+  .notif-agent-chip{background:rgba(45,171,122,.15);color:var(--accent2);border-radius:4px;font-size:10px;padding:1px 5px;font-weight:500;margin-right:4px}
+
+  /* AGENT INVOCATION MODAL */
+  .modal-overlay{background:rgba(0,0,0,.55);border-radius:12px;padding:40px 30px;display:flex;align-items:center;justify-content:center;min-height:420px}
+  .modal{background:var(--surface2);border:1px solid #3b3f55;border-radius:14px;width:100%;max-width:420px;overflow:hidden;box-shadow:0 8px 48px rgba(0,0,0,.5)}
+  .modal-hdr{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+  .agent-avatar{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:500;flex-shrink:0}
+  .agent-title{font-weight:500;font-size:14px;color:var(--text1)}
+  .agent-subtitle{font-size:11px;color:var(--text3)}
+  .modal-close{margin-left:auto;width:24px;height:24px;border-radius:6px;border:none;background:transparent;color:var(--text2);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center}
+  .modal-close:hover{background:var(--msg-hover)}
+  .modal-body{padding:14px 16px}
+  .capability-list{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+  .cap-item{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:var(--surface);border-radius:8px;border:1px solid var(--border);cursor:pointer}
+  .cap-item:hover{border-color:#4a4f6a;background:#2a2f3e}
+  .cap-icon{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;background:#1e2d28;color:var(--accent2)}
+  .cap-label{font-size:13px;color:var(--text1);font-weight:500}
+  .cap-desc{font-size:11px;color:var(--text3);margin-top:1px}
+  .modal-input-wrap{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;display:flex;align-items:center;gap:8px}
+  .modal-input-wrap:focus-within{border-color:#4a4f6a}
+  .modal-inp{background:transparent;border:none;outline:none;color:var(--text1);font-size:13px;flex:1;font-family:inherit}
+  .modal-inp::placeholder{color:var(--text3)}
+  .modal-send{padding:5px 12px;border-radius:7px;background:var(--accent);border:none;color:#fff;font-size:12px;cursor:pointer;font-family:inherit}
+  .modal-footer{padding:8px 16px 12px;display:flex;gap:8px;flex-wrap:wrap}
+  .quick-chip{padding:4px 10px;border-radius:8px;background:var(--surface);border:1px solid var(--border);font-size:11px;color:var(--text2);cursor:pointer}
+  .quick-chip:hover{border-color:#4a4f6a;color:var(--text1)}
+
+  /* Mobile wireframe */
+  .mobile-frame{width:200px;flex-shrink:0;background:var(--bg);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+  .mob-status{background:#111318;padding:6px 10px;display:flex;justify-content:space-between;align-items:center;font-size:10px;color:var(--text3)}
+  .mob-nav{background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:8px 10px;gap:8px}
+  .mob-nav-title{font-size:13px;font-weight:500;color:var(--text1);flex:1}
+  .mob-msgs{padding:10px 8px;display:flex;flex-direction:column;gap:8px}
+  .mob-msg{display:flex;gap:6px}
+  .mob-avatar{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:500;flex-shrink:0}
+  .mob-avatar.bot{border-radius:7px}
+  .mob-bubble{background:var(--surface2);border-radius:10px;border-top-left-radius:3px;padding:7px 9px;font-size:11px;color:var(--text2);line-height:1.45;max-width:140px}
+  .mob-bubble.agent{background:#1e2d28;border-top-left-radius:3px;border-left:2px solid var(--agent)}
+  .mob-mention{color:var(--accent2);font-weight:500}
+  .mob-input{background:var(--surface);border-top:1px solid var(--border);padding:8px;display:flex;gap:6px;align-items:center}
+  .mob-inp-field{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:16px;padding:5px 10px;font-size:11px;color:var(--text3)}
+  .mob-send{width:26px;height:26px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff}
+  .mob-label{font-size:10px;color:var(--text3);text-align:center;padding:4px 0;background:#111318}
+
+  /* annotation */
+  .ann-box{display:inline-flex;align-items:center;gap:4px;background:#2a1a3a;border:1px solid #5865f2;border-radius:6px;font-size:10px;color:#a0a8f8;padding:2px 7px;margin-bottom:8px}
+  .ann-num{width:14px;height:14px;background:var(--accent);border-radius:50%;font-size:9px;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:500;flex-shrink:0}
+</style>
+
+<div style="display:flex;flex-direction:column;gap:16px;padding:0 0 4px">
+
+  <div class="row" style="align-items:stretch">
+    <!-- NOTIFICATIONS PANEL -->
+    <div class="panel">
+      <div class="ann-box" style="margin:10px 14px 0;display:flex"><span class="ann-num">6</span>Notifications &amp; Inbox</div>
+      <div class="panel-hdr">
+        Inbox
+        <div class="hdr-actions">
+          <button class="hdr-btn">Mark all read</button>
+          <button class="hdr-btn">Filter ▾</button>
+        </div>
+      </div>
+      <div class="notif-tabs">
+        <div class="ntab active">All <span style="background:#ed4245;border-radius:8px;font-size:10px;padding:1px 5px;color:#fff;margin-left:4px">5</span></div>
+        <div class="ntab">Mentions</div>
+        <div class="ntab">Agent replies</div>
+        <div class="ntab">Threads</div>
+      </div>
+      <div class="notif-list">
+        <div class="notif-item unread">
+          <div class="notif-icon bot" style="background:#163524;color:#57f2b8">SA</div>
+          <div class="notif-body">
+            <div class="notif-title"><span class="notif-agent-chip">agent reply</span><span class="space">#general · DVerse Platform</span></div>
+            <div class="notif-preview">survey-agent: Vote tally updated — Zenoh leads 3:1. Full analysis ready.</div>
+          </div>
+          <div class="notif-time">now</div>
+        </div>
+        <div class="notif-item unread">
+          <div class="notif-icon" style="background:#1f2d4a;color:#7da7e0">AK</div>
+          <div class="notif-body">
+            <div class="notif-title"><span class="notif-mention-chip">@mention</span><span class="space">#architecture · DVerse Platform</span></div>
+            <div class="notif-preview">alex.kim: @you can you check the Zenoh Rust bindings doc I shared?</div>
+          </div>
+          <div class="notif-time">2m</div>
+        </div>
+        <div class="notif-item unread">
+          <div class="notif-icon bot" style="background:#1a1f3a;color:#7289da">MB</div>
+          <div class="notif-body">
+            <div class="notif-title"><span class="notif-agent-chip">agent reply</span><span class="space">#general · DVerse Platform</span></div>
+            <div class="notif-preview">mentor-bot: Finished audit of Python codebase. Found 3 migration risks worth discussing.</div>
+          </div>
+          <div class="notif-time">8m</div>
+        </div>
+        <div class="notif-item">
+          <div class="notif-icon" style="background:#2d1a1a;color:#e07d7d">SR</div>
+          <div class="notif-body">
+            <div class="notif-title"><span class="space">#pub-sub-design · DVerse Platform</span></div>
+            <div class="notif-preview">sara.r started a thread: "Migration risks from NATS → Zenoh"</div>
+          </div>
+          <div class="notif-time">15m</div>
+        </div>
+        <div class="notif-item unread">
+          <div class="notif-icon" style="background:#163524;color:#57f2b8;border-radius:10px">CR</div>
+          <div class="notif-body">
+            <div class="notif-title"><span class="notif-agent-chip">agent reply</span><span class="space">#ai-experiments · DVerse Platform</span></div>
+            <div class="notif-preview">code-review-bot: PR #14 review complete. 2 critical issues, 5 suggestions.</div>
+          </div>
+          <div class="notif-time">32m</div>
+        </div>
+        <div class="notif-item">
+          <div class="notif-icon" style="background:#1a2d1a;color:#7dc87d">JL</div>
+          <div class="notif-body">
+            <div class="notif-title"><span class="space">#fediverse-bridge · DVerse Platform</span></div>
+            <div class="notif-preview">j.liu: Posted Matrix integration prototype — needs review</div>
+          </div>
+          <div class="notif-time">1h</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AGENT INVOCATION MODAL -->
+    <div style="flex:1;display:flex;flex-direction:column;gap:12px">
+      <div class="ann-box" style="display:flex;width:fit-content"><span class="ann-num">7</span>Agent Invocation — @mention triggers this</div>
+      <div class="modal-overlay">
+        <div class="modal">
+          <div class="modal-hdr">
+            <div class="agent-avatar" style="background:#1a1f3a;color:#7289da">MB</div>
+            <div>
+              <div class="agent-title">mentor-bot</div>
+              <div class="agent-subtitle">Educational assistant · Active in #general</div>
+            </div>
+            <button class="modal-close">✕</button>
+          </div>
+          <div class="modal-body">
+            <div style="font-size:12px;color:var(--text2);margin-bottom:10px">Capabilities in this space:</div>
+            <div class="capability-list">
+              <div class="cap-item">
+                <div class="cap-icon">📚</div>
+                <div>
+                  <div class="cap-label">Explain concepts</div>
+                  <div class="cap-desc">Architecture, Rust, Pub-Sub, AI agents</div>
+                </div>
+              </div>
+              <div class="cap-item">
+                <div class="cap-icon">🔍</div>
+                <div>
+                  <div class="cap-label">Code review &amp; analysis</div>
+                  <div class="cap-desc">Python, Rust, architectural patterns</div>
+                </div>
+              </div>
+              <div class="cap-item">
+                <div class="cap-icon">💡</div>
+                <div>
+                  <div class="cap-label">Decision support</div>
+                  <div class="cap-desc">Trade-off analysis, research summaries</div>
+                </div>
+              </div>
+            </div>
+            <div class="modal-input-wrap">
+              <span style="font-size:13px;color:var(--accent2);font-weight:500">@mentor-bot</span>
+              <input class="modal-inp" placeholder="Ask something…" />
+              <button class="modal-send">Send</button>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <div class="quick-chip">What is Zenoh?</div>
+            <div class="quick-chip">Explain pub-sub patterns</div>
+            <div class="quick-chip">Summarise last decisions</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MOBILE VIEW -->
+  <div style="display:flex;align-items:flex-start;gap:16px">
+    <div class="ann-box" style="display:flex;align-self:flex-start;margin-top:6px"><span class="ann-num">8</span>Mobile breakpoint</div>
+    <div class="mobile-frame">
+      <div class="mob-status">
+        <span>DVerse</span><span>9:12</span>
+      </div>
+      <div class="mob-nav">
+        <span style="font-size:14px;color:var(--text2)">←</span>
+        <span style="font-size:16px;color:var(--text2)">#</span>
+        <span class="mob-nav-title">general</span>
+        <span style="font-size:14px;color:var(--text2)">👥</span>
+      </div>
+      <div class="mob-msgs">
+        <div class="mob-msg">
+          <div class="mob-avatar" style="background:#3b2f6e;color:#a99ef0">MvG</div>
+          <div class="mob-bubble"><span class="mob-mention">@survey-agent</span> set up a vote on NATS vs Zenoh</div>
+        </div>
+        <div class="mob-msg">
+          <div class="mob-avatar bot" style="background:#163524;color:#57f2b8">SA</div>
+          <div class="mob-bubble agent">🔵 NATS · 🟣 Zenoh<br>React to vote. Results in 30 min.</div>
+        </div>
+        <div class="mob-msg">
+          <div class="mob-avatar" style="background:#1f2d4a;color:#7da7e0">AK</div>
+          <div class="mob-bubble"><span class="mob-mention">@mentor-bot</span> explain Zenoh trade-offs?</div>
+        </div>
+        <div class="mob-msg">
+          <div class="mob-avatar bot" style="background:#1a1f3a;color:#7289da">MB</div>
+          <div class="mob-bubble agent">Zenoh is peer-to-peer capable, no central broker. Better for DVerse mesh architecture…</div>
+        </div>
+      </div>
+      <div class="mob-input">
+        <div class="mob-inp-field">@mentor-bot ...</div>
+        <div class="mob-send">➤</div>
+      </div>
+      <div class="mob-label">Mobile layout — spaces accessible via bottom nav</div>
+    </div>
+
+    <!-- Legend / flow notes -->
+    <div style="flex:1;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px">
+      <div style="font-size:13px;font-weight:500;color:var(--text1);margin-bottom:10px">Interaction flows</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div style="padding:8px 10px;background:var(--surface2);border-radius:8px;border-left:3px solid var(--accent)">
+          <div style="font-size:12px;font-weight:500;color:var(--text1);margin-bottom:2px">Agent invocation</div>
+          <div style="font-size:11px;color:var(--text2)">User types <code style="background:#1a1d23;border-radius:3px;padding:0 3px;color:#e06c75">@agentname</code> at message start → agent is pinged → agent responds inline with a styled card</div>
+        </div>
+        <div style="padding:8px 10px;background:var(--surface2);border-radius:8px;border-left:3px solid var(--accent2)">
+          <div style="font-size:12px;font-weight:500;color:var(--text1);margin-bottom:2px">Space navigation</div>
+          <div style="font-size:11px;color:var(--text2)">Spaces rail (far left) → select Space → channels list populates → click channel → chat loads</div>
+        </div>
+        <div style="padding:8px 10px;background:var(--surface2);border-radius:8px;border-left:3px solid var(--warn)">
+          <div style="font-size:12px;font-weight:500;color:var(--text1);margin-bottom:2px">Notifications</div>
+          <div style="font-size:11px;color:var(--text2)">Unread dot on space icon → click → inbox view shows @mentions, agent replies, threads grouped by type</div>
+        </div>
+        <div style="padding:8px 10px;background:var(--surface2);border-radius:8px;border-left:3px solid #ed4245">
+          <div style="font-size:12px;font-weight:500;color:var(--text1);margin-bottom:2px">Thread creation</div>
+          <div style="font-size:11px;color:var(--text2)">Hover over message → Thread button appears → opens side-panel thread view without leaving main channel</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
