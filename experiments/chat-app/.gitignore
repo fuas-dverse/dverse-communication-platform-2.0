@@ -1,0 +1,6 @@
+.env
+chatapp.db*
+.venv/
+node_modules/
+__pycache__/
+dist/
