@@ -1,0 +1,17 @@
+mode: peer
+listen:
+  endpoints:
+    - "tcp/0.0.0.0:7447"
+  timeout_ms: 5000
+  retry:
+    mode: "exponential"
+    max_retries: 10
+    delay_ms: 500
+transport:
+  auth:
+    tls:
+      cert: "/home/daki4/certs/server_cert.pem"
+      key:  "/home/daki4/certs/server_key.pem"
+      ca:   "/home/daki4/certs/ca_cert.pem"
+      verify: true
+
