@@ -1,0 +1,81 @@
+name: Build Bot Agent
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: bot_agent-linux
+            binary: dist/bot_agent
+          - os: macos-latest
+            artifact: bot_agent-macos
+            binary: dist/bot_agent
+          - os: windows-latest
+            artifact: bot_agent-windows
+            binary: dist/bot_agent.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: pip install pyinstaller eclipse-zenoh~=0.11.0 anthropic httpx
+
+      - name: Build
+        run: >
+          pyinstaller
+          --onefile
+          --name bot_agent
+          --collect-all zenoh
+          --collect-all anthropic
+          --collect-all httpx
+          --hidden-import zenoh
+          bot_agent.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    # Only publish a release when a tag is pushed
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Rename binaries for release
+        run: |
+          mv artifacts/bot_agent-linux/bot_agent   artifacts/bot_agent-linux
+          mv artifacts/bot_agent-macos/bot_agent   artifacts/bot_agent-macos
+          mv artifacts/bot_agent-windows/bot_agent.exe artifacts/bot_agent-windows.exe
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/bot_agent-linux
+            artifacts/bot_agent-macos
+            artifacts/bot_agent-windows.exe
+          generate_release_notes: true
