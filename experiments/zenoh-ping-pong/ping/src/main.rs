@@ -15,12 +15,12 @@ async fn main() {
             })
         }
         Err(_) => {
-            println!("using default zenoh config - will use configuration file if available");
-            // Default to using the Config::default() and rely on config files
+            println!("using default zenoh config");
             zenoh::Config::default()
         }
     };
     println!("cwd: {:?}", std::env::current_dir());
+    //dbg!(config.clone());
     let session = zenoh::open(config).await.unwrap();
     let subscriber = session.declare_subscriber("ping").await.unwrap();
     while let Ok(sample) = subscriber.recv_async().await {
