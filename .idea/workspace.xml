@@ -14,10 +14,28 @@
         <feature name="default" enabled="true" />
       </package>
     </cargoProject>
-    <cargoProject FILE="$PROJECT_DIR$/experiments/mini-ls-application/Cargo.toml" />
+    <cargoProject FILE="$PROJECT_DIR$/experiments/mini-ls-application/Cargo.toml">
+      <package file="$PROJECT_DIR$/experiments/mini-ls-application">
+        <feature name="default" enabled="true" />
+      </package>
+    </cargoProject>
+    <cargoProject FILE="$PROJECT_DIR$/experiments/zenoh-chat-abel/Cargo.toml">
+      <package file="$PROJECT_DIR$/experiments/zenoh-chat-abel">
+        <feature name="default" enabled="true" />
+      </package>
+    </cargoProject>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="Applied feedback from Yordan's code review" />
+    <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="Made a Zenoh peer to peer chat system in Rust, which also has rate limiting and input validation.">
+      <change afterPath="$PROJECT_DIR$/.idea/.gitignore" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/copilot.data.migration.ask2agent.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/experiments/zenoh-chat-abel/Cargo.lock" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/experiments/zenoh-chat-abel/Cargo.toml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/experiments/zenoh-chat-abel/README.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/experiments/zenoh-chat-abel/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -30,23 +48,38 @@
     </persistenceIdMap>
   </component>
   <component name="ExecutionTargetManager" SELECTED_TARGET="RsBuildProfile:dev" />
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Rust File" />
+      </list>
+    </option>
+  </component>
   <component name="Git.Settings">
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="develop" />
+      </map>
+    </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
-  "lastFilter": {
-    "state": "OPEN",
-    "assignee": "abelm21"
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;abelm21&quot;
   }
-}]]></component>
-  <component name="GithubPullRequestsUISettings"><![CDATA[{
-  "selectedUrlAndAccountId": {
-    "url": "https://github.com/fuas-dverse/dverse-communication-platform-2.0.git",
-    "accountId": "545bacdc-26a1-496a-9c0a-add0e69b8983"
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/fuas-dverse/dverse-communication-platform-2.0.git&quot;,
+    &quot;accountId&quot;: &quot;545bacdc-26a1-496a-9c0a-add0e69b8983&quot;
   }
-}]]></component>
+}</component>
   <component name="MacroExpansionManager">
     <option name="directoryName" value="QKNgroPY" />
+  </component>
+  <component name="ProblemsViewState">
+    <option name="selectedTabId" value="CurrentFile" />
   </component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 8
@@ -59,12 +92,14 @@
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
     "Cargo.Run mini_ls.executor": "Run",
+    "Cargo.Run zenoh-chat-abel.executor": "Run",
     "ModuleVcsDetector.initialDetectionPerformed": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
     "RunOnceActivity.git.unshallow": "true",
     "RunOnceActivity.rust.reset.selective.auto.import": "true",
     "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "git-widget-placeholder": "feature/zenoh-chat-abel",
     "ignore.virus.scanning.warn.message": "true",
     "javascript.preferred.runtime.type.id": "node",
     "last_opened_file_path": "C:/Users/abelm/projects/dverse-communication-platform-2.0",
@@ -83,16 +118,34 @@
 }]]></component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\abelm\projects\dverse-communication-platform-2.0\experiments\zenoh-chat-abel" />
       <recent name="C:\Users\abelm\projects\dverse-communication-platform-2.0\mini_ls" />
       <recent name="C:\Users\abelm\projects\mini_ls\src" />
     </key>
   </component>
-  <component name="RunManager" selected="Cargo.Run mini_ls">
+  <component name="RunManager" selected="Cargo.Run zenoh-chat-abel">
     <configuration name="Run mini_ls" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
       <option name="buildProfileId" value="dev" />
       <target name="WSL - Ubuntu" />
       <option name="command" value="run --package mini_ls --bin mini_ls" />
       <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+      <envs />
+      <option name="emulateTerminal" value="true" />
+      <option name="channel" value="DEFAULT" />
+      <option name="requiredFeatures" value="true" />
+      <option name="allFeatures" value="false" />
+      <option name="withSudo" value="false" />
+      <option name="buildTarget" value="REMOTE" />
+      <option name="backtrace" value="SHORT" />
+      <option name="isRedirectInput" value="false" />
+      <option name="redirectInputPath" value="" />
+      <method v="2">
+        <option name="CARGO.BUILD_TASK_PROVIDER" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="Run zenoh-chat-abel" type="CargoCommandRunConfiguration" factoryName="Cargo Command" temporary="true">
+      <option name="command" value="run --package zenoh-chat-abel --bin zenoh-chat-abel" />
+      <option name="workingDirectory" value="file://$PROJECT_DIR$/experiments/zenoh-chat-abel" />
       <envs />
       <option name="emulateTerminal" value="true" />
       <option name="channel" value="DEFAULT" />
@@ -129,7 +182,13 @@
     <list>
       <item itemvalue="Cargo.Run mini_ls" />
       <item itemvalue="Cargo.Test mini_ls" />
+      <item itemvalue="Cargo.Run zenoh-chat-abel" />
     </list>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Cargo.Run zenoh-chat-abel" />
+      </list>
+    </recent_temporary>
   </component>
   <component name="RustProjectSettings">
     <option name="rustcTarget" value="x86_64-unknown-linux-gnu" />
@@ -146,6 +205,9 @@
       <workItem from="1773049556694" duration="1692000" />
       <workItem from="1773051352326" duration="537000" />
       <workItem from="1773056390752" duration="5537000" />
+      <workItem from="1776084767896" duration="549000" />
+      <workItem from="1776162626318" duration="1331000" />
+      <workItem from="1776240054255" duration="2968000" />
     </task>
     <task id="LOCAL-00001" summary="Applied feedback from Yordan's code review">
       <option name="closed" value="true" />
@@ -171,7 +233,8 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Applied feedback from Yordan's code review" />
-    <option name="LAST_COMMIT_MESSAGE" value="Applied feedback from Yordan's code review" />
+    <MESSAGE value="Made a Zenoh peer to peer chat system in Rust, which also has rate limiting and input validation." />
+    <option name="LAST_COMMIT_MESSAGE" value="Made a Zenoh peer to peer chat system in Rust, which also has rate limiting and input validation." />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
