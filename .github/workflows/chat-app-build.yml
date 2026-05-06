@@ -184,9 +184,4 @@ jobs:
         with:
           project-token: ${{ secrets.CODACY_KEY }}
           upload: true
-          directory: experiments/chat-app
-          exclude-paths: |
-            frontend/dist
-            frontend/node_modules
-            backend/__pycache__
-            backend/chatapp.db
+          directory: ${{ github.workspace }}/experiments/chat-app
