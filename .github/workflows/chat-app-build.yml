@@ -94,7 +94,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: frontend-coverage
-          path: coverage/lcov.info
+          path: frontend/coverage/lcov.info
           if-no-files-found: error
 
       - name: Upload frontend coverage to Codacy
@@ -102,7 +102,7 @@ jobs:
         uses: codacy/codacy-coverage-reporter-action@v1
         with:
           project-token: ${{ secrets.CODACY_KEY }}
-          coverage-reports: coverage/lcov.info
+          coverage-reports: frontend/coverage/lcov.info
           language: TypeScript
 
   frontend-build:
