@@ -97,14 +97,6 @@ jobs:
           path: experiments/chat-app/frontend/coverage/lcov.info
           if-no-files-found: error
 
-      - name: Upload frontend coverage to Codacy
-        if: ${{ env.CODACY_KEY != '' }}
-        uses: codacy/codacy-coverage-reporter-action@v1
-        with:
-          project-token: ${{ secrets.CODACY_KEY }}
-          coverage-reports: frontend/coverage/lcov.info
-          language: TypeScript
-
   frontend-build:
     needs: frontend-test
     runs-on: ubuntu-latest
@@ -123,7 +115,7 @@ jobs:
           node-version: "20"
 
       - name: Install frontend dependencies
-        run: rm -rf node_modules package-lock.json && npm install 
+        run: rm -rf node_modules package-lock.json && npm install
 
       - name: Build frontend
         run: npm run build
@@ -139,11 +131,6 @@ jobs:
       CODACY_KEY: ${{ secrets.CODACY_KEY }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Skip Codacy when not configured
         if: ${{ env.CODACY_KEY == '' }}
         run: echo "CODACY_KEY is not configured; skipping Codacy analysis."
@@ -177,11 +164,3 @@ jobs:
           project-token: ${{ secrets.CODACY_KEY }}
           coverage-reports: coverage/frontend/lcov.info
           language: TypeScript
-
-      - name: Run Codacy Analysis
-        if: ${{ env.CODACY_KEY != '' }}
-        uses: codacy/codacy-analysis-cli-action@v4
-        with:
-          project-token: ${{ secrets.CODACY_KEY }}
-          upload: true
-          directory: ${{ github.workspace }}/experiments/chat-app
