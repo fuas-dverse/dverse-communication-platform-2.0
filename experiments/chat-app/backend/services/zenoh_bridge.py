@@ -32,30 +32,31 @@ class ZenohBridge:
         router = os.environ.get("ZENOH_ROUTER", "tcp/localhost:7447")
         try:
             import zenoh  # optional dependency
-            conf = zenoh.Config()
-            conf.insert_json5("connect/endpoints", json.dumps([router]))
+            conf = zenoh.Config.from_json5(json.dumps({
+                "connect": {"endpoints": [router]}
+            }))
             self._session = zenoh.open(conf)
             self._sub = self._session.declare_subscriber(
                 "chat/response/**",
                 self._on_response,
             )
             self.available = True
-            print(f"[Zenoh] Connected to router at {router}")
+            print(f"[Zenoh] Connected to router at {router} (ZID: {self._session.zid()})")
         except Exception as exc:
             print(f"[Zenoh] Not available ({exc}). Zenoh bots will be disabled.")
 
     def _on_response(self, sample):
         """Called from Zenoh's internal thread — must not touch asyncio directly."""
         try:
-            data = json.loads(bytes(sample.payload).decode("utf-8"))
+            data = json.loads(bytes(sample.payload.to_bytes()).decode("utf-8"))
             request_id = data.get("request_id")
             content = data.get("content", "")
             if request_id and request_id in self._pending:
                 future = self._pending.pop(request_id)
                 if not future.done():
                     self._loop.call_soon_threadsafe(future.set_result, content)
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[Zenoh] _on_response error: {exc}")
 
     async def request(
         self,
@@ -83,7 +84,7 @@ class ZenohBridge:
 
         await loop.run_in_executor(
             None,
-            lambda: self._session.put(f"chat/{room_id}/request/{bot_name}", payload),
+            lambda: self._session.put(f"chat/{room_id}/request/{bot_name}", payload.encode()),
         )
 
         try:
