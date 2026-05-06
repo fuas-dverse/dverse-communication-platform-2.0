@@ -2,5 +2,10 @@
   "devDependencies": {
     "@vitest/coverage-v8": "^2.1.9",
     "jsdom": "^28.1.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "test": "vitest run"
   }
 }

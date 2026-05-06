@@ -54,7 +54,6 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    # Only publish a release when a tag is pushed
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
