@@ -159,7 +159,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: frontend-coverage
-          path: coverage/frontend
+          path: experiments/chat-app/frontend/coverage/lcov.info
 
       - name: Upload backend coverage to Codacy
         if: ${{ env.CODACY_KEY != '' }}
@@ -174,7 +174,7 @@ jobs:
         uses: codacy/codacy-coverage-reporter-action@v1
         with:
           project-token: ${{ secrets.CODACY_KEY }}
-          coverage-reports: coverage/frontend/coverage.json
+          coverage-reports: coverage/frontend/lcov.info
           language: TypeScript
 
       - name: Run Codacy Analysis
