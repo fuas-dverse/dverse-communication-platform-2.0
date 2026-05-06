@@ -88,13 +88,14 @@ jobs:
         run: rm -rf node_modules package-lock.json && npm install
 
       - name: Run frontend tests with coverage
-        run: npm run test --coverage
+        run: npm run test -- --coverage
 
       - name: Upload frontend coverage report
         uses: actions/upload-artifact@v4
         with:
           name: frontend-coverage
           path: coverage/lcov.info
+          if-no-files-found: error
 
       - name: Upload frontend coverage to Codacy
         if: ${{ env.CODACY_KEY != '' }}
@@ -159,7 +160,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: frontend-coverage
-          path: experiments/chat-app/frontend/coverage/lcov.info
+          path: coverage/frontend
 
       - name: Upload backend coverage to Codacy
         if: ${{ env.CODACY_KEY != '' }}
