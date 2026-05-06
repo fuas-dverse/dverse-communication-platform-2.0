@@ -25,7 +25,6 @@ export default function ChatArea({
   onBotsChange,
   isCreator,
 }: Props) {
-  const [activeTab, setActiveTab] = useState("Messages")
   const [showBotSettings, setShowBotSettings] = useState(false)
 
   // Detect if any bot message is currently "thinking"
@@ -226,36 +225,6 @@ function HdrBtn({
     >
       {children}
     </button>
-  )
-}
-
-function TabBtn({
-  label,
-  active,
-  onClick,
-}: {
-  label: string
-  active: boolean
-  onClick: () => void
-}) {
-  const [hovered, setHovered] = useState(false)
-  return (
-    <div
-      onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        padding: "8px 14px",
-        fontSize: "12px",
-        color: active || hovered ? "#e0e2ea" : "#9a9fad",
-        cursor: "pointer",
-        borderBottom: active ? "2px solid #5865f2" : "2px solid transparent",
-        marginBottom: "-1px",
-        userSelect: "none",
-      }}
-    >
-      {label}
-    </div>
   )
 }
 
