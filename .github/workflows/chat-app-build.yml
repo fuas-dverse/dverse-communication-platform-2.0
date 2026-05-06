@@ -73,7 +73,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: experiments/chat-app
+        working-directory: experiments/chat-app/frontend
 
     steps:
       - name: Checkout repository
@@ -88,13 +88,13 @@ jobs:
         run: rm -rf node_modules package-lock.json && npm install
 
       - name: Run frontend tests with coverage
-        run: npm run test -- --coverage
+        run: npx vitest run --coverage
 
       - name: Upload frontend coverage report
         uses: actions/upload-artifact@v4
         with:
           name: frontend-coverage
-          path: frontend/coverage/lcov.info
+          path: coverage/lcov.info
           if-no-files-found: error
 
       - name: Upload frontend coverage to Codacy
