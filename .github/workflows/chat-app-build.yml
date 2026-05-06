@@ -73,7 +73,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: experiments/chat-app/frontend
+        working-directory: experiments/chat-app
 
     steps:
       - name: Checkout repository
