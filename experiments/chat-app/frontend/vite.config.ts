@@ -8,6 +8,8 @@ const viteConfig = defineViteConfig({
 
 const vitestConfig = defineVitestConfig({
   test: {
+    environment: 'jsdom',
+    include: ['tests/**/*.{test,spec}.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['lcov', 'text'],

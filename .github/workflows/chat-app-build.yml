@@ -94,14 +94,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: frontend-coverage
-          path: experiments/chat-app/frontend/coverage/lcov.info
+          path: coverage/lcov.info
 
       - name: Upload frontend coverage to Codacy
         if: ${{ env.CODACY_KEY != '' }}
         uses: codacy/codacy-coverage-reporter-action@v1
         with:
           project-token: ${{ secrets.CODACY_KEY }}
-          coverage-reports: coverage/frontend/lcov.info
+          coverage-reports: coverage/lcov.info
           language: TypeScript
 
   frontend-build:
