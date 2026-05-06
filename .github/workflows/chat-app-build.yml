@@ -85,7 +85,7 @@ jobs:
           node-version: "20"
 
       - name: Install frontend dependencies
-        run: rm -rf node_modules package-lock.json && npm install && npm install --save-dev @vitest/coverage-v8
+        run: rm -rf node_modules package-lock.json && npm install
 
       - name: Run frontend tests with coverage
         run: npm run test -- --coverage --reporter=json --outputFile=coverage/coverage.json
