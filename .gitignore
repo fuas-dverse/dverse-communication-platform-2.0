@@ -31,3 +31,7 @@ venv/
 bin/
 target/
 certs/
+
+
+#Ignore vscode AI rules
+.github\instructions\codacy.instructions.md

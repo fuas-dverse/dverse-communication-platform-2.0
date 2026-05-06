@@ -1,4 +1,4 @@
-name: Chat App Build
+name: DVerse Communications Platform
 
 on:
   push:
@@ -31,8 +31,17 @@ jobs:
       - name: Install backend dependencies
         run: python -m pip install --upgrade pip && pip install -r backend/requirements.txt
 
-      - name: Run backend tests
-        run: python -m unittest discover -s backend/tests -v
+      - name: Run backend tests with coverage
+        run: |
+          pip install coverage
+          coverage run -m unittest discover -s backend/tests -v
+          coverage xml -o coverage.xml
+
+      - name: Upload backend coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: experiments/chat-app/coverage.xml
 
   backend-build:
     needs: backend-test
@@ -59,6 +68,34 @@ jobs:
           python -m compileall backend
           python -m py_compile bot_agent.py
 
+  frontend-test:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: experiments/chat-app/frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install frontend dependencies
+        run: rm -rf node_modules package-lock.json && npm install
+
+      - name: Run frontend tests with coverage
+        run: npm run test -- --coverage --reporter=json --outputFile=coverage/coverage.json
+
+      - name: Upload frontend coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: experiments/chat-app/frontend/coverage/
+
   frontend-build:
     needs: frontend-test
     runs-on: ubuntu-latest
@@ -75,40 +112,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: experiments/chat-app/frontend/package-lock.json
 
-      - name: Install frontend dependencies 
+      - name: Install frontend dependencies
         run: rm -rf node_modules package-lock.json && npm install
 
       - name: Build frontend
         run: npm run build
 
-  frontend-test:
-    runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: experiments/chat-app/frontend
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: experiments/chat-app/frontend/package-lock.json
-
-      - name: Install frontend dependencies 
-        run: rm -rf node_modules package-lock.json && npm install
-
-      - name: Run frontend tests
-        run: npm run test
-
-  sonarqube:
+  codacy:
     needs:
       - backend-test
       - backend-build
@@ -116,8 +127,7 @@ jobs:
       - frontend-build
     runs-on: ubuntu-latest
     env:
-      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+      CODACY_KEY: ${{ secrets.CODACY_KEY }}
 
     steps:
       - name: Checkout repository
@@ -125,25 +135,49 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
+      - name: Skip Codacy when not configured
+        if: ${{ env.CODACY_KEY == '' }}
+        run: echo "CODACY_KEY is not configured; skipping Codacy analysis."
 
-      - name: Skip SonarQube when not configured
-        if: ${{ env.SONAR_TOKEN == '' || env.SONAR_HOST_URL == '' }}
-        run: echo "SONAR_TOKEN or SONAR_HOST_URL is not configured; skipping SonarQube scan."
-
-      - name: Run SonarQube scan
-        if: ${{ env.SONAR_TOKEN != '' && env.SONAR_HOST_URL != '' }}
-        uses: sonarsource/sonarqube-scan-action@v2.3.0
+      - name: Download backend coverage
+        if: ${{ env.CODACY_KEY != '' }}
+        uses: actions/download-artifact@v4
         with:
-          args: >
-            -Dsonar.projectKey=dverse-chat-app
-            -Dsonar.projectName=Dverse Chat App
-            -Dsonar.projectBaseDir=experiments/chat-app
-            -Dsonar.sources=backend,frontend/src
-            -Dsonar.tests=backend/tests,frontend/tests
-            -Dsonar.exclusions=frontend/dist/**,frontend/node_modules/**,backend/__pycache__/**,backend/chatapp.db
-            -Dsonar.sourceEncoding=UTF-8
+          name: backend-coverage
+          path: coverage/backend
+
+      - name: Download frontend coverage
+        if: ${{ env.CODACY_KEY != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-coverage
+          path: coverage/frontend
+
+      - name: Upload backend coverage to Codacy
+        if: ${{ env.CODACY_KEY != '' }}
+        uses: codacy/codacy-coverage-reporter-action@v1
+        with:
+          project-token: ${{ secrets.CODACY_KEY }}
+          coverage-reports: coverage/backend/coverage.xml
+          language: Python
+
+      - name: Upload frontend coverage to Codacy
+        if: ${{ env.CODACY_KEY != '' }}
+        uses: codacy/codacy-coverage-reporter-action@v1
+        with:
+          project-token: ${{ secrets.CODACY_KEY }}
+          coverage-reports: coverage/frontend/coverage.json
+          language: TypeScript
+
+      - name: Run Codacy Analysis
+        if: ${{ env.CODACY_KEY != '' }}
+        uses: codacy/codacy-analysis-cli-action@v4
+        with:
+          project-token: ${{ secrets.CODACY_KEY }}
+          upload: true
+          directory: experiments/chat-app
+          exclude-paths: |
+            frontend/dist
+            frontend/node_modules
+            backend/__pycache__
+            backend/chatapp.db
