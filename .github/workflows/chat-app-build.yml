@@ -54,10 +54,8 @@ jobs:
           cache: npm
           cache-dependency-path: experiments/chat-app/frontend/package-lock.json
 
-      - name: CI
-        run: npm ci
       - name: Install frontend dependencies
-        run: npm install --include=optional
+        run: rm -rf node_modules package-lock.json && npm install
 
       - name: Build frontend
         run: npm run build
