@@ -115,7 +115,7 @@ jobs:
           node-version: "20"
 
       - name: Install frontend dependencies
-        run: rm -rf node_modules package-lock.json && npm install
+        run: npm ci
 
       - name: Build frontend
         run: npm run build
