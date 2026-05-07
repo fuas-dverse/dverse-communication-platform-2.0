@@ -85,7 +85,7 @@ jobs:
           node-version: "20"
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: pwd && npm ci
 
       - name: Run frontend tests with coverage
         run: npx vitest run --coverage
