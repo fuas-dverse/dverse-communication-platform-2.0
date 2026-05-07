@@ -35,3 +35,4 @@ certs/
 
 #Ignore vscode AI rules
 .github\instructions\codacy.instructions.md
+.codacy/cli.sh
