@@ -29,7 +29,7 @@
     <cargoProject FILE="$PROJECT_DIR$/Cargo/Cargo.toml" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="Fixed back-end tests">
+    <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="fix: added test database">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/experiments/chat-app/backend/db.py" beforeDir="false" afterPath="$PROJECT_DIR$/experiments/chat-app/backend/db.py" afterDir="false" />
     </list>
@@ -227,7 +227,7 @@
       <workItem from="1778490278405" duration="1882000" />
       <workItem from="1778665047063" duration="4968000" />
       <workItem from="1778675465832" duration="1870000" />
-      <workItem from="1778677412129" duration="5831000" />
+      <workItem from="1778677412129" duration="6598000" />
     </task>
     <task id="LOCAL-00001" summary="Applied feedback from Yordan's code review">
       <option name="closed" value="true" />
@@ -373,7 +373,15 @@
       <option name="project" value="LOCAL" />
       <updated>1778682984792</updated>
     </task>
-    <option name="localTasksCounter" value="19" />
+    <task id="LOCAL-00019" summary="fix: added test database">
+      <option name="closed" value="true" />
+      <created>1778683273861</created>
+      <option name="number" value="00019" />
+      <option name="presentableId" value="LOCAL-00019" />
+      <option name="project" value="LOCAL" />
+      <updated>1778683273861</updated>
+    </task>
+    <option name="localTasksCounter" value="20" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -406,7 +414,8 @@
     <MESSAGE value="fix: add init_py to make tests discoverable in CI" />
     <MESSAGE value="fix: added pythonpath to backend test stage" />
     <MESSAGE value="Fixed back-end tests" />
-    <option name="LAST_COMMIT_MESSAGE" value="Fixed back-end tests" />
+    <MESSAGE value="fix: added test database" />
+    <option name="LAST_COMMIT_MESSAGE" value="fix: added test database" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
