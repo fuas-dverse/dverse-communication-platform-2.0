@@ -29,9 +29,9 @@
     <cargoProject FILE="$PROJECT_DIR$/Cargo/Cargo.toml" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="Fixed tests, added unit tests for back-end, improved front-end tests">
+    <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="Hopefully fixing the pipeline for the last time">
+      <change beforePath="$PROJECT_DIR$/.github/workflows/chat-app-build.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/chat-app-build.yml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/experiments/chat-app/backend/tests/test_auth.py" beforeDir="false" afterPath="$PROJECT_DIR$/experiments/chat-app/backend/tests/test_auth.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -227,7 +227,7 @@
       <workItem from="1778490278405" duration="1882000" />
       <workItem from="1778665047063" duration="4968000" />
       <workItem from="1778675465832" duration="1870000" />
-      <workItem from="1778677412129" duration="3471000" />
+      <workItem from="1778677412129" duration="3874000" />
     </task>
     <task id="LOCAL-00001" summary="Applied feedback from Yordan's code review">
       <option name="closed" value="true" />
@@ -325,7 +325,15 @@
       <option name="project" value="LOCAL" />
       <updated>1778680305513</updated>
     </task>
-    <option name="localTasksCounter" value="13" />
+    <task id="LOCAL-00013" summary="Hopefully fixing the pipeline for the last time">
+      <option name="closed" value="true" />
+      <created>1778681123832</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1778681123832</updated>
+    </task>
+    <option name="localTasksCounter" value="14" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -353,7 +361,8 @@
     <MESSAGE value="Added linting stage for back-end and also cleaned up code" />
     <MESSAGE value="Fixing  CI/CD" />
     <MESSAGE value="Fixed tests, added unit tests for back-end, improved front-end tests" />
-    <option name="LAST_COMMIT_MESSAGE" value="Fixed tests, added unit tests for back-end, improved front-end tests" />
+    <MESSAGE value="Hopefully fixing the pipeline for the last time" />
+    <option name="LAST_COMMIT_MESSAGE" value="Hopefully fixing the pipeline for the last time" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
