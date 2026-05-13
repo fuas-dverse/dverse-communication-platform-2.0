@@ -3,9 +3,9 @@ from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from jose import jwt
 
-import backend.auth_routes as auth_routes
+import backend.routes.auth as auth_routes
 import backend.auth as auth_module
-from backend.schemas import UserCreate, UserLogin
+from backend.models.user import UserCreate, UserLogin
 
 
 class TestAuth(unittest.TestCase):
