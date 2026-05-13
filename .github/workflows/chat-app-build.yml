@@ -1,5 +1,9 @@
 name: DVerse Communications Platform
 
+concurrency:
+  group: chat-app-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     paths:
@@ -12,7 +16,27 @@ on:
   workflow_dispatch:
 
 jobs:
+  backend-lint:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: experiments/chat-app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: |
+          pip install ruff
+          ruff check backend
+
   backend-test:
+    needs: backend-lint
     runs-on: ubuntu-latest
 
     defaults:
@@ -27,6 +51,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
       - name: Install backend dependencies
         run: python -m pip install --upgrade pip && pip install -r backend/requirements.txt
@@ -59,6 +84,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
       - name: Install backend dependencies
         run: python -m pip install --upgrade pip && pip install -r backend/requirements.txt
@@ -83,6 +109,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+          cache-dependency-path: experiments/chat-app/frontend/package-lock.json
 
       - name: Install frontend dependencies
         run: pwd && npm ci
@@ -112,6 +140,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+          cache-dependency-path: experiments/chat-app/frontend/package-lock.json
 
       - name: Install frontend dependencies
         run: npm ci
@@ -121,6 +151,7 @@ jobs:
 
   codacy:
     needs:
+      - backend-lint
       - backend-test
       - backend-build
       - frontend-test

@@ -1,5 +1,9 @@
 name: Build ADR Documentation
 
+concurrency:
+  group: adr-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches:

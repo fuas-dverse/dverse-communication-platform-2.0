@@ -29,14 +29,10 @@
     <cargoProject FILE="$PROJECT_DIR$/Cargo/Cargo.toml" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="Implemented Peer Review Changes from Yordan">
+    <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="Fixed bug regarding CI/CD pipeline not having all stages in develop">
+      <change beforePath="$PROJECT_DIR$/.github/workflows/adr-build.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/adr-build.yml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.github/workflows/chat-app-build.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/chat-app-build.yml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/documents/adr/ADR-001.pdf" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/documents/adr/ADR-002.pdf" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/documents/adr/ADR-003.pdf" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/documents/adr/ADR-004.pdf" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/documents/adr/ADR-005.pdf" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -231,7 +227,7 @@
       <workItem from="1778490278405" duration="1882000" />
       <workItem from="1778665047063" duration="4968000" />
       <workItem from="1778675465832" duration="1870000" />
-      <workItem from="1778677412129" duration="453000" />
+      <workItem from="1778677412129" duration="1096000" />
     </task>
     <task id="LOCAL-00001" summary="Applied feedback from Yordan's code review">
       <option name="closed" value="true" />
@@ -273,7 +269,15 @@
       <option name="project" value="LOCAL" />
       <updated>1778677671495</updated>
     </task>
-    <option name="localTasksCounter" value="6" />
+    <task id="LOCAL-00006" summary="Fixed bug regarding CI/CD pipeline not having all stages in develop">
+      <option name="closed" value="true" />
+      <created>1778677926673</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1778677926673</updated>
+    </task>
+    <option name="localTasksCounter" value="7" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -285,7 +289,8 @@
     <MESSAGE value="Made ADRs for use cases and added them to our repository" />
     <MESSAGE value="added ADR for avahi" />
     <MESSAGE value="Implemented Peer Review Changes from Yordan" />
-    <option name="LAST_COMMIT_MESSAGE" value="Implemented Peer Review Changes from Yordan" />
+    <MESSAGE value="Fixed bug regarding CI/CD pipeline not having all stages in develop" />
+    <option name="LAST_COMMIT_MESSAGE" value="Fixed bug regarding CI/CD pipeline not having all stages in develop" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
