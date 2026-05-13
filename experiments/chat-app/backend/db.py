@@ -1,10 +1,62 @@
 import sqlite3
-import threading
-from pathlib import Path
+import unittest
+from unittest.mock import patch
+from fastapi import HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
+from jose import jwt
 
-DB_PATH = Path(__file__).parent.parent / "chatapp.db"
+import backend.routes.auth as auth_routes
+import backend.auth as auth_module
+import backend.db as db_module
+from backend.models.user import UserCreate, UserLogin  # adjust if needed
 
-_local = threading.local()
+
+def make_test_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+class TestAuth(unittest.TestCase):
+    def setUp(self) -> None:
+        self.conn = make_test_db()
+        patcher = patch.object(db_module, "get_db", return_value=self.conn)
+        self.mock_get_db = patcher.start()
+        self.addCleanup(patcher.stop)
+        db_module.init_db()
+
+    def tearDown(self) -> None:
+        self.conn.close()import sqlite3
+                         import unittest
+                         from unittest.mock import patch
+                         from fastapi import HTTPException
+                         from fastapi.security import HTTPAuthorizationCredentials
+                         from jose import jwt
+
+                         import backend.routes.auth as auth_routes
+                         import backend.auth as auth_module
+                         import backend.db as db_module
+                         from backend.models.user import UserCreate, UserLogin  # adjust if needed
+
+
+                         def make_test_db() -> sqlite3.Connection:
+                             conn = sqlite3.connect(":memory:", check_same_thread=False)
+                             conn.execute("PRAGMA foreign_keys=ON")
+                             conn.row_factory = sqlite3.Row
+                             return conn
+
+
+                         class TestAuth(unittest.TestCase):
+                             def setUp(self) -> None:
+                                 self.conn = make_test_db()
+                                 patcher = patch.object(db_module, "get_db", return_value=self.conn)
+                                 self.mock_get_db = patcher.start()
+                                 self.addCleanup(patcher.stop)
+                                 db_module.init_db()
+
+                             def tearDown(self) -> None:
+                                 self.conn.close()
 
 
 def get_db() -> sqlite3.Connection:

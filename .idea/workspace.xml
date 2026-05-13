@@ -29,10 +29,9 @@
     <cargoProject FILE="$PROJECT_DIR$/Cargo/Cargo.toml" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="fix: added pythonpath to backend test stage">
+    <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="Fixed back-end tests">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/experiments/chat-app/backend/tests/__init__.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/experiments/chat-app/backend/tests/test_auth.py" beforeDir="false" afterPath="$PROJECT_DIR$/experiments/chat-app/backend/tests/test_auth.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/experiments/chat-app/backend/db.py" beforeDir="false" afterPath="$PROJECT_DIR$/experiments/chat-app/backend/db.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -228,7 +227,7 @@
       <workItem from="1778490278405" duration="1882000" />
       <workItem from="1778665047063" duration="4968000" />
       <workItem from="1778675465832" duration="1870000" />
-      <workItem from="1778677412129" duration="5551000" />
+      <workItem from="1778677412129" duration="5831000" />
     </task>
     <task id="LOCAL-00001" summary="Applied feedback from Yordan's code review">
       <option name="closed" value="true" />
@@ -366,7 +365,15 @@
       <option name="project" value="LOCAL" />
       <updated>1778682559079</updated>
     </task>
-    <option name="localTasksCounter" value="18" />
+    <task id="LOCAL-00018" summary="Fixed back-end tests">
+      <option name="closed" value="true" />
+      <created>1778682984792</created>
+      <option name="number" value="00018" />
+      <option name="presentableId" value="LOCAL-00018" />
+      <option name="project" value="LOCAL" />
+      <updated>1778682984792</updated>
+    </task>
+    <option name="localTasksCounter" value="19" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -398,7 +405,8 @@
     <MESSAGE value="Regenerated package-lock on WSL so CI won't complain anymore" />
     <MESSAGE value="fix: add init_py to make tests discoverable in CI" />
     <MESSAGE value="fix: added pythonpath to backend test stage" />
-    <option name="LAST_COMMIT_MESSAGE" value="fix: added pythonpath to backend test stage" />
+    <MESSAGE value="Fixed back-end tests" />
+    <option name="LAST_COMMIT_MESSAGE" value="Fixed back-end tests" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
