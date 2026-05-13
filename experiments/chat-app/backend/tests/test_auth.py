@@ -7,7 +7,6 @@ from fastapi.security import HTTPAuthorizationCredentials
 from jose import jwt
 
 import backend.auth as auth_module
-import backend.db as db_module
 import backend.routes.auth as auth_routes
 from backend.models.user import UserCreate, UserLogin
 
