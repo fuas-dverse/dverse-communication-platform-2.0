@@ -31,6 +31,7 @@
   <component name="ChangeListManager">
     <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="fix: add init_py to make tests discoverable in CI">
       <change beforePath="$PROJECT_DIR$/.github/workflows/chat-app-build.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/chat-app-build.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -226,7 +227,7 @@
       <workItem from="1778490278405" duration="1882000" />
       <workItem from="1778665047063" duration="4968000" />
       <workItem from="1778675465832" duration="1870000" />
-      <workItem from="1778677412129" duration="4506000" />
+      <workItem from="1778677412129" duration="5116000" />
     </task>
     <task id="LOCAL-00001" summary="Applied feedback from Yordan's code review">
       <option name="closed" value="true" />
@@ -348,7 +349,15 @@
       <option name="project" value="LOCAL" />
       <updated>1778681819165</updated>
     </task>
-    <option name="localTasksCounter" value="16" />
+    <task id="LOCAL-00016" summary="fix: add init_py to make tests discoverable in CI">
+      <option name="closed" value="true" />
+      <created>1778681995745</created>
+      <option name="number" value="00016" />
+      <option name="presentableId" value="LOCAL-00016" />
+      <option name="project" value="LOCAL" />
+      <updated>1778681995745</updated>
+    </task>
+    <option name="localTasksCounter" value="17" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
