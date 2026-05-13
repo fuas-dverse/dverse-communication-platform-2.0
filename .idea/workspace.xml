@@ -29,13 +29,10 @@
     <cargoProject FILE="$PROJECT_DIR$/Cargo/Cargo.toml" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="Made a Zenoh peer to peer chat system in Rust, which also has rate limiting and input validation.">
-      <change afterPath="$PROJECT_DIR$/documents/adr/ADR-001.pdf" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/documents/adr/ADR-002.pdf" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/documents/adr/ADR-003.pdf" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/documents/adr/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+    <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="Made ADRs for use cases and added them to our repository">
+      <change afterPath="$PROJECT_DIR$/documents/adr/ADR-005.pdf" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/documents/adr/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/documents/adr/README.md" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -71,6 +68,13 @@
     &quot;assignee&quot;: &quot;abelm21&quot;
   }
 }</component>
+  <component name="GithubProjectSettings">
+    <option name="branchProtectionPatterns">
+      <list>
+        <option value="main" />
+      </list>
+    </option>
+  </component>
   <component name="GithubPullRequestsUISettings">{
   &quot;selectedUrlAndAccountId&quot;: {
     &quot;url&quot;: &quot;https://github.com/fuas-dverse/dverse-communication-platform-2.0.git&quot;,
@@ -217,7 +221,7 @@
       <workItem from="1776240054255" duration="2968000" />
       <workItem from="1778053482975" duration="1140000" />
       <workItem from="1778490278405" duration="1882000" />
-      <workItem from="1778665047063" duration="3019000" />
+      <workItem from="1778665047063" duration="4058000" />
     </task>
     <task id="LOCAL-00001" summary="Applied feedback from Yordan's code review">
       <option name="closed" value="true" />
@@ -235,7 +239,15 @@
       <option name="project" value="LOCAL" />
       <updated>1773065475301</updated>
     </task>
-    <option name="localTasksCounter" value="3" />
+    <task id="LOCAL-00003" summary="Made ADRs for use cases and added them to our repository">
+      <option name="closed" value="true" />
+      <created>1778669093979</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1778669093979</updated>
+    </task>
+    <option name="localTasksCounter" value="4" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -244,7 +256,8 @@
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Applied feedback from Yordan's code review" />
     <MESSAGE value="Made a Zenoh peer to peer chat system in Rust, which also has rate limiting and input validation." />
-    <option name="LAST_COMMIT_MESSAGE" value="Made a Zenoh peer to peer chat system in Rust, which also has rate limiting and input validation." />
+    <MESSAGE value="Made ADRs for use cases and added them to our repository" />
+    <option name="LAST_COMMIT_MESSAGE" value="Made ADRs for use cases and added them to our repository" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
