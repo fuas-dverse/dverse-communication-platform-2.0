@@ -3,11 +3,10 @@ import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-
-load_dotenv()
-
 from .db import init_db
 from .routes import auth, rooms, messages, servers
+
+load_dotenv()
 
 app = FastAPI(title="ChatApp API")
 

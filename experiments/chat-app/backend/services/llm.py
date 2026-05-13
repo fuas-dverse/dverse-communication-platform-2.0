@@ -1,7 +1,6 @@
 import os
 import re
 import json as json_lib
-from datetime import datetime, timezone
 
 import anthropic
 import httpx
@@ -32,8 +31,6 @@ def _messages_to_prompt(messages: list[dict]) -> str:
 def _build_system_prompt(bot: BotConfig) -> str:
     personality_key = BotPersonality(bot.personality)
     base = PERSONALITY_PROMPTS.get(personality_key, PERSONALITY_PROMPTS[BotPersonality.ASSISTANT])
-    now = datetime.now(timezone.utc)
-    today_label = f"{now.date().isoformat()} ({now.strftime('%A')}, UTC)"
     return (
         f"{base}\n\n"
         f"Your name is @{bot.name}. "
