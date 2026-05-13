@@ -1,0 +1,110 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+
+% Core packages
+\usepackage{amsmath,amssymb}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+% Paragraphs
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.8\baselineskip}
+\emergencystretch=2em
+
+% Lists
+\setlist[itemize]{topsep=0.25\baselineskip,itemsep=0.25\baselineskip}
+\setlist[enumerate]{topsep=0.25\baselineskip,itemsep=0.25\baselineskip}
+
+% Table helpers
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\title{Architecture Decision Record: ADR-004\\
+\large Implementing AI-to-AI Communication over Chat}
+\author{Abel-Raul Mazilu}
+\date{13-05-2026}
+
+\begin{document}
+\maketitle
+
+\begin{center}
+\begin{tabular}{rl}
+\textbf{Status:} & Accepted \\
+\textbf{Project:} & DVerse Communication Platform 2.0 \\
+\end{tabular}
+\end{center}
+
+\section{Context}
+
+The DVerse platform includes a chat application interface through which users interact with the system. As AI agents become active participants in the platform, some agent-to-agent interactions should be visible in chat so that users can observe, inspect, and participate in multi-agent workflows.
+
+This chat-based communication is distinct from Zenoh-based system messaging. Zenoh remains the dedicated asynchronous messaging layer, while the chat application provides a user-visible surface for selected agent interactions.
+
+\section{Decision}
+
+Sprint 4 will implement AI-agent-to-AI-agent communication through the chat application. Agents will be able to appear as identifiable participants in chat conversations, respond to each other, and preserve conversation context across multi-agent exchanges.
+
+This implementation will include the following capabilities:
+
+\begin{itemize}
+    \item Displaying agent messages in the chat application interface.
+    \item Allowing agents to respond to one another inside chat conversations.
+    \item Distinguishing agent-authored messages from user-authored messages.
+    \item Preserving conversation context across multi-agent exchanges.
+    \item Emitting OpenTelemetry traces and Pydantic Logfire logs for chat-mediated agent interactions.
+\end{itemize}
+
+Chat-visible events should reference the underlying Zenoh message identifiers or trace identifiers where appropriate. This allows engineers to move from a chat event to the corresponding distributed trace and structured logs.
+
+\section{Alternative Decisions}
+
+One alternative was to keep all agent-to-agent communication hidden from the chat interface. This was rejected because it would make multi-agent workflows less transparent to users.
+
+Another alternative was to use chat as the primary system transport for agent-to-agent communication. This was rejected because chat is a user-facing interaction layer, while Zenoh is the dedicated messaging infrastructure for decoupled system communication.
+
+\section{Consequences}
+
+\subsection{Positive}
+
+\begin{itemize}
+    \item Users can observe AI agents communicating with each other inside the chat interface.
+    \item Agent-authored messages become distinguishable from user-authored messages.
+    \item Chat interactions can be correlated with traces, logs, and underlying Zenoh events.
+    \item Multi-agent workflows become easier to understand and inspect.
+\end{itemize}
+
+\subsection{Negative}
+
+\begin{itemize}
+    \item Chat-mediated agent communication introduces additional requirements around message authorship and display clarity.
+    \item Conversation context must be preserved carefully across multi-agent exchanges.
+    \item The team must avoid treating chat as a replacement for the dedicated Zenoh messaging layer.
+\end{itemize}
+
+\section{Scope}
+
+\begin{table}[ht]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{L{0.32\textwidth} L{0.58\textwidth}}
+\toprule
+\textbf{Deliverable} & \textbf{Description} \\
+\midrule
+Agent chat display & Show AI-agent messages in the chat application interface. \\
+Agent replies & Allow AI agents to respond to each other inside chat conversations. \\
+Message authorship & Distinguish agent-authored messages from user-authored messages. \\
+Conversation context & Preserve context across multi-agent chat exchanges. \\
+Observability links & Correlate chat events with traces, logs, and Zenoh message identifiers. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\newpage
+
+\section*{Statement on AI Use}
+
+Artificial intelligence was used to support the drafting of parts of this document. The generated text was subsequently reviewed, checked, and edited where necessary by me, the author, Abel-Raul Mazilu.
+
+\end{document}
