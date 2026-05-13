@@ -5,7 +5,19 @@
   </component>
   <component name="CargoProjects">
     <cargoProject FILE="$PROJECT_DIR$/Cargo.toml">
-      <package file="$PROJECT_DIR$">
+      <package file="$PROJECT_DIR$/experiments/mini-ls-application">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/experiments/zenoh-ping-pong/ping">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/experiments/zenoh-ping-pong/pong">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/experiments/mini-tree-command">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/experiments/zenoh-chat-abel">
         <feature name="default" enabled="true" />
       </package>
     </cargoProject>
@@ -14,26 +26,15 @@
         <feature name="default" enabled="true" />
       </package>
     </cargoProject>
-    <cargoProject FILE="$PROJECT_DIR$/experiments/mini-ls-application/Cargo.toml">
-      <package file="$PROJECT_DIR$/experiments/mini-ls-application">
-        <feature name="default" enabled="true" />
-      </package>
-    </cargoProject>
-    <cargoProject FILE="$PROJECT_DIR$/experiments/zenoh-chat-abel/Cargo.toml">
-      <package file="$PROJECT_DIR$/experiments/zenoh-chat-abel">
-        <feature name="default" enabled="true" />
-      </package>
-    </cargoProject>
+    <cargoProject FILE="$PROJECT_DIR$/Cargo/Cargo.toml" />
   </component>
   <component name="ChangeListManager">
     <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="Made a Zenoh peer to peer chat system in Rust, which also has rate limiting and input validation.">
-      <change afterPath="$PROJECT_DIR$/.idea/.gitignore" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/copilot.data.migration.ask2agent.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/experiments/zenoh-chat-abel/Cargo.lock" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/experiments/zenoh-chat-abel/Cargo.toml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/experiments/zenoh-chat-abel/README.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/experiments/zenoh-chat-abel/src/main.rs" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/documents/adr/ADR-001.pdf" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/documents/adr/ADR-002.pdf" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/documents/adr/ADR-003.pdf" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/documents/adr/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -45,6 +46,7 @@
     <persistenceIdMap>
       <entry key="_C:/Users/abelm/projects/dverse-communication-platform-2.0" value="3AhsyGwKUSHgRGKPAhnvw35axyP" />
       <entry key="_C:/Users/abelm/projects/mini_ls" value="3ANu0O79OsmmClxBDdCijJIku12" />
+      <entry key="_E:/School/Semester 6/Personal Experiments/dverse-communication-platform-2.0" value="3DLFXXADUC8RR97I0HSB7seTdij" />
     </persistenceIdMap>
   </component>
   <component name="ExecutionTargetManager" SELECTED_TARGET="RsBuildProfile:dev" />
@@ -99,10 +101,10 @@
     "RunOnceActivity.git.unshallow": "true",
     "RunOnceActivity.rust.reset.selective.auto.import": "true",
     "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "git-widget-placeholder": "feature/zenoh-chat-abel",
+    "git-widget-placeholder": "develop",
     "ignore.virus.scanning.warn.message": "true",
     "javascript.preferred.runtime.type.id": "node",
-    "last_opened_file_path": "C:/Users/abelm/projects/dverse-communication-platform-2.0",
+    "last_opened_file_path": "E:/School/Semester 6/Personal Experiments/dverse-communication-platform-2.0/documents/adr",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
     "node.js.selected.package.eslint": "(autodetect)",
@@ -117,7 +119,12 @@
   }
 }]]></component>
   <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="E:\School\Semester 6\Personal Experiments\dverse-communication-platform-2.0\documents\adr" />
+    </key>
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="E:\School\Semester 6\Personal Experiments\dverse-communication-platform-2.0\documents\adr" />
+      <recent name="E:\School\Semester 6\Personal Experiments\dverse-communication-platform-2.0" />
       <recent name="C:\Users\abelm\projects\dverse-communication-platform-2.0\experiments\zenoh-chat-abel" />
       <recent name="C:\Users\abelm\projects\dverse-communication-platform-2.0\mini_ls" />
       <recent name="C:\Users\abelm\projects\mini_ls\src" />
@@ -208,6 +215,9 @@
       <workItem from="1776084767896" duration="549000" />
       <workItem from="1776162626318" duration="1331000" />
       <workItem from="1776240054255" duration="2968000" />
+      <workItem from="1778053482975" duration="1140000" />
+      <workItem from="1778490278405" duration="1882000" />
+      <workItem from="1778665047063" duration="3019000" />
     </task>
     <task id="LOCAL-00001" summary="Applied feedback from Yordan's code review">
       <option name="closed" value="true" />
