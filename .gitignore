@@ -1,4 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
 venv/
 bin/
+
+# Node
+node_modules/
+
+# Build artifacts
 target/
+dist/
+build/
+*.spec
+
+# Certs & secrets
 certs/
+.env
+.env.local
+
+# DB
+*.db
+*.db-shm
+*.db-wal
+.idea/
+
+documents/adr/build/
+documents/adr/*.pdf

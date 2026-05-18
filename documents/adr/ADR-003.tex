@@ -1,0 +1,110 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+
+% Core packages
+\usepackage{amsmath,amssymb}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+% Paragraphs
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.8\baselineskip}
+\emergencystretch=2em
+
+% Lists
+\setlist[itemize]{topsep=0.25\baselineskip,itemsep=0.25\baselineskip}
+\setlist[enumerate]{topsep=0.25\baselineskip,itemsep=0.25\baselineskip}
+
+% Table helpers
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\title{Architecture Decision Record: ADR-003\\
+\large Implementing AI-to-AI Communication over Zenoh}
+\author{Abel-Raul Mazilu}
+\date{13-05-2026}
+
+\begin{document}
+\maketitle
+
+\begin{center}
+\begin{tabular}{rl}
+\textbf{Status:} & Accepted \\
+\textbf{Project:} & DVerse Communication Platform 2.0 \\
+\end{tabular}
+\end{center}
+
+\section{Context}
+
+The DVerse platform is moving toward a multi-agent architecture in which AI agents act as autonomous participants. These agents need a decoupled communication mechanism that does not depend on direct service-to-service calls or the chat application transport layer.
+
+Zenoh has already been selected as the messaging layer for the platform. Its topic-based publish-subscribe model is suitable for asynchronous agent communication and future secured transport requirements.
+
+\section{Decision}
+
+Sprint 4 will implement AI-agent-to-AI-agent communication over Zenoh. Agents will publish and subscribe to structured Zenoh topics as first-class participants in the system.
+
+This implementation will include the following capabilities:
+
+\begin{itemize}
+    \item Topic conventions for agent discovery, commands, responses, status updates, and errors.
+    \item Structured message schemas for payloads exchanged between agents.
+    \item Publish and subscribe flows that allow agents to communicate without direct coupling.
+    \item Message correlation identifiers for request and response tracking.
+    \item Error handling for failed publications, invalid payloads, and unavailable subscribers.
+\end{itemize}
+
+Zenoh communication must be instrumented with OpenTelemetry spans and Pydantic Logfire logs from the beginning. Each published or consumed message should be observable through both tracing and structured logging.
+
+\section{Alternative Decisions}
+
+One alternative was to route all agent communication through the chat application. This was rejected because the chat application is a user-facing interface, not the dedicated system messaging layer.
+
+Another alternative was to evaluate a different messaging system during Sprint 4. This was rejected because Zenoh had already been retained from prior architectural decisions due to its performance characteristics, topic-based publish-subscribe model, and suitability for future mTLS/PKI-secured transport.
+
+\section{Consequences}
+
+\subsection{Positive}
+
+\begin{itemize}
+    \item Agents can communicate asynchronously without direct coupling.
+    \item The messaging layer remains independent of the chat application interface.
+    \item Topic conventions and message schemas provide a foundation for future agent scaling.
+    \item Zenoh interactions can be traced and logged consistently from the beginning.
+\end{itemize}
+
+\subsection{Negative}
+
+\begin{itemize}
+    \item Topic naming, schema design, and correlation conventions must be documented clearly.
+    \item Invalid payloads and unavailable subscribers require explicit error-handling behavior.
+    \item Additional integration complexity is introduced during Sprint 4.
+\end{itemize}
+
+\section{Scope}
+
+\begin{table}[ht]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{L{0.32\textwidth} L{0.58\textwidth}}
+\toprule
+\textbf{Deliverable} & \textbf{Description} \\
+\midrule
+Topic conventions & Define Zenoh topics for discovery, commands, responses, status updates, and errors. \\
+Message schemas & Define structured payloads for AI-agent-to-AI-agent communication. \\
+Publish-subscribe flows & Enable agents to exchange messages asynchronously over Zenoh. \\
+Message correlation & Add identifiers for request-response tracking and trace correlation. \\
+Error handling & Handle failed publications, invalid payloads, and unavailable subscribers. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\newpage
+
+\section*{Statement on AI Use}
+
+Artificial intelligence was used to support the drafting of parts of this document. The generated text was subsequently reviewed, checked, and edited where necessary by me, the author, Abel-Raul Mazilu.
+
+\end{document}

@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "experiments/mini-tree-command",
+    "experiments/mini-ls-application",
+    "experiments/zenoh-chat-abel",
+    "experiments/zenoh-ping-pong/ping",
+    "experiments/zenoh-ping-pong/pong"
+]

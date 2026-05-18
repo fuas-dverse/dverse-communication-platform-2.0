@@ -1,0 +1,20 @@
+{
+  "mode": "router",
+  "listen": {
+    "endpoints": ["tls/[::]:7447"]
+  },
+  "scouting": {
+    "multicast": { "enabled": false },
+    "gossip": { "enabled": false }
+  },
+  "transport": {
+    "link": {
+      "tls": {
+        root_ca_certificate: "/stuff/programming/uni/css-7/dverse-communication-platform-2.0/experiments/zenoh-ping-pong/certs/ca.crt",
+        listen_private_key: "/stuff/programming/uni/css-7/dverse-communication-platform-2.0/experiments/zenoh-ping-pong/certs/server.key",
+        listen_certificate: "/stuff/programming/uni/css-7/dverse-communication-platform-2.0/experiments/zenoh-ping-pong/certs/server.crt",
+        enable_mtls: true,
+      }
+    }
+  }
+}
