@@ -29,9 +29,8 @@
     <cargoProject FILE="$PROJECT_DIR$/Cargo/Cargo.toml" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="accidentally removed important lines of code oopsie">
-      <change beforePath="$PROJECT_DIR$/.github/workflows/chat-app-build.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/chat-app-build.yml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+    <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="fix: ci pipeline">
+      <change beforePath="$PROJECT_DIR$/experiments/chat-app/frontend/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/experiments/chat-app/frontend/package.json" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -389,7 +388,15 @@
       <option name="project" value="LOCAL" />
       <updated>1778684036288</updated>
     </task>
-    <option name="localTasksCounter" value="21" />
+    <task id="LOCAL-00021" summary="fix: ci pipeline">
+      <option name="closed" value="true" />
+      <created>1779094440621</created>
+      <option name="number" value="00021" />
+      <option name="presentableId" value="LOCAL-00021" />
+      <option name="project" value="LOCAL" />
+      <updated>1779094440621</updated>
+    </task>
+    <option name="localTasksCounter" value="22" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -424,7 +431,8 @@
     <MESSAGE value="Fixed back-end tests" />
     <MESSAGE value="fix: added test database" />
     <MESSAGE value="accidentally removed important lines of code oopsie" />
-    <option name="LAST_COMMIT_MESSAGE" value="accidentally removed important lines of code oopsie" />
+    <MESSAGE value="fix: ci pipeline" />
+    <option name="LAST_COMMIT_MESSAGE" value="fix: ci pipeline" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
