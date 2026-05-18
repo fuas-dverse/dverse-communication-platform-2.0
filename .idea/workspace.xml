@@ -30,8 +30,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="d9f81c17-efee-442c-a98d-86dc41674090" name="Changes" comment="accidentally removed important lines of code oopsie">
+      <change beforePath="$PROJECT_DIR$/.github/workflows/chat-app-build.yml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/chat-app-build.yml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/experiments/chat-app/backend/tests/test_auth.py" beforeDir="false" afterPath="$PROJECT_DIR$/experiments/chat-app/backend/tests/test_auth.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -107,7 +107,7 @@
     "RunOnceActivity.git.unshallow": "true",
     "RunOnceActivity.rust.reset.selective.auto.import": "true",
     "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "git-widget-placeholder": "#54 on develop",
+    "git-widget-placeholder": "#62 on feature/chat-app",
     "ignore.virus.scanning.warn.message": "true",
     "javascript.preferred.runtime.type.id": "node",
     "last_opened_file_path": "E:/School/Semester 6/Personal Experiments/dverse-communication-platform-2.0/.github/workflows",
