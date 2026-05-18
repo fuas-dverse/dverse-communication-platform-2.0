@@ -23,11 +23,7 @@ certs/
 *.db
 *.db-shm
 *.db-wal
-venv/
-bin/
-target/
-certs/
-venv/
-bin/
-target/
-certs/
+.idea/
+
+documents/adr/build/
+documents/adr/*.pdf

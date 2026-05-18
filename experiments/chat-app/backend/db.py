@@ -1,4 +1,9 @@
 import sqlite3
+import unittest
+from unittest.mock import patch
+
+import backend.db as db_module
+
 import threading
 from pathlib import Path
 
@@ -6,6 +11,23 @@ DB_PATH = Path(__file__).parent.parent / "chatapp.db"
 
 _local = threading.local()
 
+def make_test_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+class TestAuth(unittest.TestCase):
+    def setUp(self) -> None:
+        self.conn = make_test_db()
+        patcher = patch.object(db_module, "get_db", return_value=self.conn)
+        self.mock_get_db = patcher.start()
+        self.addCleanup(patcher.stop)
+        db_module.init_db()
+
+    def tearDown(self) -> None:
+        self.conn.close()
 
 def get_db() -> sqlite3.Connection:
     if not hasattr(_local, "conn") or _local.conn is None:
