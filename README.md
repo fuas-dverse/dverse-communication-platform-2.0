@@ -75,6 +75,7 @@ npm run dev
 ```
 .
 ├── experiments/            # Isolated Rust & Zenoh experiments
+│   ├── chat-app/               # Proof of Concept for the Communications Platform
 │   ├── mini-ls-application/    # Rust ls clone (learning project)
 │   ├── mini-tree-command/      # Rust tree command
 │   ├── zenoh-chat-abel/        # Zenoh pub-sub chat experiment
@@ -92,11 +93,12 @@ Every push to `main` and every pull request triggers the GitHub Actions pipeline
 
 | Stage | What it does |
 |---|---|
-| `build` | Compile Rust workspace, install Python and Node dependencies |
-| `test-rust` | Run `cargo test` across all workspace members |
-| `test-python` | Run Pytest suite for AI agent components |
-| `coverage` | Generate and upload coverage reports |
-| `codacy` | Enforce style, complexity, and security checks on Rust and Python |
+| `backend-lint` | Runs `ruff` to enforce Python backend code style in `backend/` |
+| `backend-test` | Runs unit tests with coverage using `unittest` + `coverage.py` |
+| `backend-build` | Validates backend source files (`compileall`, `py_compile`) |
+| `frontend-test` | Runs frontend tests using `vitest` with coverage (Bun runtime) |
+| `frontend-build` | Builds the frontend using `bun run build` |
+| `codacy` | Aggregates backend + frontend coverage and uploads to Codacy (if configured) |
 
 Branch protection requires all stages to pass before merge.
 
@@ -106,6 +108,7 @@ The `experiments/` directory contains standalone Rust and Zenoh projects used to
 
 | Experiment | Purpose |
 |---|---|
+| `chat-app` | DVerse Communications Platform Proof of Concept |
 | `mini-ls-application` | Rust fundamentals — I/O, ownership, iterators |
 | `mini-tree-command` | Recursive filesystem traversal in Rust |
 | `zenoh-chat-abel` | Multi-user pub-sub chat over Zenoh |
@@ -113,7 +116,7 @@ The `experiments/` directory contains standalone Rust and Zenoh projects used to
 
 ## Related Projects
 
-This platform provides the underlying communication infrastructure for the [DVerse Collaboration Game](https://github.com/fuas-dverse) — interactive sessions for groups guided by AI agents.
+This platform provides the underlying communication infrastructure for the [DVerse Collaboration Game](https://github.com/fuas-dverse/modular-commons) — interactive sessions for groups guided by AI agents.
 
 ## Contributors
 
@@ -121,7 +124,7 @@ This platform provides the underlying communication infrastructure for the [DVer
 |---|---|
 | [Abel-Raul Mazilu](https://github.com/AbelMazilu) | CI/CD, UI/UX, Zenoh experiments, Rust & Python back-end |
 | [Yordan Mitev](https://github.com/YordanMitev) | Rust, Zenoh, mTLS / PKI security |
-| [Denis Neagoe](https://github.com/DenisNeagoe) | Proof-of-concept, AI–human & AI–AI communication |
+| [Denis Neagoe](https://github.com/DenisNeagoe) | Zenoh Bridge, AI Context, AI–human & AI–AI communication |
 
 **Supervisor:** Marc van Grootel — Fontys ICT, Interaction Design Research Group
 
