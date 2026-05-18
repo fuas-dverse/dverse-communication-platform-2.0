@@ -1,0 +1,19 @@
+[package]
+name = "zenoh-router"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "zenoh-router"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+eframe = "0.31"
+egui = "0.31"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+zenoh = "1.8.0"
