@@ -210,6 +210,65 @@ pub async fn load(cert_path: &Path, key_path: &Path) -> Result<(String, String)>
     Ok((cert, key))
 }
 
+/// Fetch and cache the Step-CA root certificate.
+///
+/// Uses an unauthenticated TLS-insecure request — acceptable for the one-time
+/// bootstrap, the same pattern as `step ca bootstrap`.  The downloaded PEM is
+/// then used for all subsequent verified connections.
+pub async fn bootstrap_ca_root(ca_url: &str, out_path: &Path) -> Result<String> {
+    // Only download if the file does not already exist.
+    if out_path.exists() {
+        return tokio::fs::read_to_string(out_path)
+            .await
+            .context("reading cached CA root PEM");
+    }
+
+    let client = reqwest::ClientBuilder::new()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .context("building bootstrap HTTP client")?;
+
+    // Step-CA exposes the root cert at GET /roots as JSON {"crts": ["<pem>", ...]}.
+    #[derive(serde::Deserialize)]
+    struct RootsResponse {
+        crts: Vec<serde_json::Value>,
+    }
+
+    let url = format!("{ca_url}/roots");
+    let resp: RootsResponse = client
+        .get(&url)
+        .send()
+        .await
+        .context("fetching CA roots")?
+        .json()
+        .await
+        .context("parsing CA roots response")?;
+
+    // The first root is the active one; Step-CA returns its PEM inline.
+    // Each entry in `crts` is a JSON object with a `raw` (base64 DER) field.
+    // Re-encode to PEM using the standard header.
+    let first = resp.crts.into_iter().next()
+        .context("CA returned empty roots list")?;
+
+    // Step-CA actually returns PEM strings directly in some versions; try that first.
+    let pem = if let Some(pem_str) = first.as_str() {
+        pem_str.to_string()
+    } else {
+        // Fall back: grab the `raw` base64 DER field and wrap it.
+        let raw = first["raw"].as_str()
+            .context("CA root entry missing 'raw' field")?;
+        format!("-----BEGIN CERTIFICATE-----\n{raw}\n-----END CERTIFICATE-----\n")
+    };
+
+    if let Some(parent) = out_path.parent() {
+        tokio::fs::create_dir_all(parent).await.context("creating config dir")?;
+    }
+    tokio::fs::write(out_path, &pem).await.context("writing CA root PEM")?;
+
+    println!("CA root certificate bootstrapped to {}", out_path.display());
+    Ok(pem)
+}
+
 /// Returns true if the cert file does not exist or is older than `max_age`.
 pub async fn needs_renewal(cert_path: &Path, max_age: std::time::Duration) -> bool {
     match tokio::fs::metadata(cert_path).await {

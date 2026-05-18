@@ -4,45 +4,22 @@ use std::path::PathBuf;
 
 /// Machine-wide dverse configuration, stored at `~/.config/dverse/config.toml`.
 /// Only one user session is supported per machine.
+///
+/// The server-side constants (Keycloak URL, CA URL, client credentials) are
+/// set by the application at save time and are not exposed in the UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DverseConfig {
-    /// Keycloak user email, e.g. "alice@dverse.yordanmitev.me"
     pub username: String,
-    /// Keycloak password (stored locally for non-interactive cert renewal)
     pub password: String,
     pub keycloak_url: String,
     pub keycloak_realm: String,
     pub client_id: String,
     pub client_secret: String,
-    /// Step-CA base URL
     pub ca_url: String,
-    /// Path to the Step-CA root PEM file on disk
+    /// Path to the cached Step-CA root PEM (bootstrapped on first login).
     pub ca_root_pem_path: String,
-    /// Directory where per-node certificates are cached
     pub cert_dir: PathBuf,
-    /// Zenoh listen address for the local router
     pub router_listen: String,
-}
-
-impl Default for DverseConfig {
-    fn default() -> Self {
-        let cert_dir = dirs::data_local_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("dverse")
-            .join("certs");
-        Self {
-            username: String::new(),
-            password: String::new(),
-            keycloak_url: String::from("https://auth.dverse.yordanmitev.me"),
-            keycloak_realm: String::from("master"),
-            client_id: String::from("step-ca"),
-            client_secret: String::new(),
-            ca_url: String::from("https://ca.dverse.yordanmitev.me:9000"),
-            ca_root_pem_path: String::new(),
-            cert_dir,
-            router_listen: String::from("tls/0.0.0.0:7447"),
-        }
-    }
 }
 
 impl DverseConfig {
@@ -51,6 +28,15 @@ impl DverseConfig {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("dverse")
             .join("config.toml")
+    }
+
+    pub fn ca_root_pem_path_default() -> String {
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("dverse")
+            .join("ca-root.pem")
+            .to_string_lossy()
+            .into_owned()
     }
 
     pub fn load() -> Result<Self> {
