@@ -6,7 +6,7 @@ use bot_framework::cert;
 use bot_framework::config::DverseConfig;
 use zenoh::Session;
 
-use crate::state::{Action, AppState, RouterStatus};
+use crate::state::{AppState, RouterStatus};
 
 /// Background entry point.  Waits for a `DverseConfig` to appear in AppState,
 /// acquires/reuses the router cert, then runs the Zenoh router indefinitely,
@@ -137,69 +137,30 @@ async fn acquire_or_reuse(
     }
 }
 
-/// Subscribe to node announce messages and drain the action queue.
-/// Returns when the admitted list changes (signalling a session restart).
+/// Subscribe to node announce messages; auto-admit any node with a valid cert.
+/// Returns when the admitted list changes (triggering an ACL session restart).
 async fn session_loop(session: &Session, state: Arc<Mutex<AppState>>) -> Result<()> {
     let subscriber = session
         .declare_subscriber("dverse/nodes/announce/**")
         .await
         .map_err(|e| anyhow::anyhow!("declare_subscriber: {e}"))?;
 
-    let admitted_snapshot = state.lock().unwrap().admitted.clone();
-
     loop {
-        tokio::select! {
-            sample = subscriber.recv_async() => {
-                match sample {
-                    Ok(s) => {
-                        let key = s.key_expr().as_str().to_string();
-                        if let Some(cn) = key.strip_prefix("dverse/nodes/announce/") {
-                            let cn = cn.to_string();
-                            let mut st = state.lock().unwrap();
-                            if st.admitted.contains(&cn) || st.denied.contains(&cn) {
-                                continue;
-                            }
-                            if !st.pending.contains_key(&cn) {
-                                st.push_log(format!("Node announced: {cn}"));
-                            }
-                            st.pending.insert(cn, std::time::Instant::now());
-                        }
-                    }
-                    Err(e) => return Err(anyhow::anyhow!("subscriber recv: {e}")),
-                }
-            }
-            _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                let actions: Vec<Action> = {
+        match subscriber.recv_async().await {
+            Ok(s) => {
+                let key = s.key_expr().as_str().to_string();
+                if let Some(cn) = key.strip_prefix("dverse/nodes/announce/") {
+                    let cn = cn.to_string();
                     let mut st = state.lock().unwrap();
-                    std::mem::take(&mut st.action_queue)
-                };
-
-                for action in actions {
-                    match action {
-                        Action::Admit(cn) => {
-                            let mut st = state.lock().unwrap();
-                            st.pending.remove(&cn);
-                            if !st.admitted.contains(&cn) {
-                                st.admitted.push(cn.clone());
-                                st.push_log(format!("Admitted: {cn}"));
-                            }
-                        }
-                        Action::Deny(cn) => {
-                            let mut st = state.lock().unwrap();
-                            st.pending.remove(&cn);
-                            if !st.denied.contains(&cn) {
-                                st.denied.push(cn.clone());
-                                st.push_log(format!("Denied: {cn}"));
-                            }
-                        }
+                    if !st.admitted.contains(&cn) {
+                        st.admitted.push(cn.clone());
+                        st.push_log(format!("Auto-admitted: {cn}"));
+                        // Signal the outer loop to restart the session with new ACL.
+                        return Ok(());
                     }
                 }
-
-                let new_admitted = state.lock().unwrap().admitted.clone();
-                if new_admitted != admitted_snapshot {
-                    return Ok(());
-                }
             }
+            Err(e) => return Err(anyhow::anyhow!("subscriber recv: {e}")),
         }
     }
 }
