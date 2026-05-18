@@ -31,6 +31,16 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
             }
         };
 
+        // Pre-admit operator's CN so all local agents can communicate immediately.
+        let operator_cn = cfg.operator_cn();
+        {
+            let mut st = state.lock().unwrap();
+            if !st.admitted.contains(&operator_cn) {
+                st.admitted.push(operator_cn.clone());
+                st.push_log(format!("Pre-admitted operator CN: {operator_cn}"));
+            }
+        }
+
         // ── Phase 2: bootstrap CA root, then acquire/reuse cert ─────────────
         {
             let mut s = state.lock().unwrap();
@@ -149,12 +159,19 @@ async fn session_loop(session: &Session, state: Arc<Mutex<AppState>>) -> Result<
         match subscriber.recv_async().await {
             Ok(s) => {
                 let key = s.key_expr().as_str().to_string();
-                if let Some(cn) = key.strip_prefix("dverse/nodes/announce/") {
-                    let cn = cn.to_string();
+                if key.starts_with("dverse/nodes/announce/") {
+                    // CN is sent as payload; fall back to key segment if empty.
+                    let payload_cn = String::from_utf8_lossy(&s.payload().to_bytes()).into_owned();
+                    let cn = if payload_cn.trim().is_empty() {
+                        key.strip_prefix("dverse/nodes/announce/").unwrap_or("").to_string()
+                    } else {
+                        payload_cn.trim().to_string()
+                    };
+                    if cn.is_empty() { continue; }
                     let mut st = state.lock().unwrap();
                     if !st.admitted.contains(&cn) {
                         st.admitted.push(cn.clone());
-                        st.push_log(format!("Auto-admitted: {cn}"));
+                        st.push_log(format!("Auto-admitted CN: {cn}"));
                         // Signal the outer loop to restart the session with new ACL.
                         return Ok(());
                     }

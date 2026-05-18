@@ -64,6 +64,16 @@ impl DverseConfig {
         Self::config_path().exists()
     }
 
+    /// Returns the cert CN — the `preferred_username` portion of the Keycloak
+    /// login (everything before the first `@`, or the whole string if no `@`).
+    pub fn operator_cn(&self) -> String {
+        self.username
+            .split('@')
+            .next()
+            .unwrap_or(&self.username)
+            .to_string()
+    }
+
     /// Build a `CertConfig` for the given node name using the stored credentials.
     pub fn cert_config_for(&self, node_name: &str) -> Result<crate::cert::CertConfig> {
         let ca_root_pem = std::fs::read_to_string(&self.ca_root_pem_path)
