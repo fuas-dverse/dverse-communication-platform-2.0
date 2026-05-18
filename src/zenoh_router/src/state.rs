@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-/// Shared state between the background Zenoh thread and the GUI thread.
+use bot_framework::config::DverseConfig;
+
 pub struct AppState {
     pub router_status: RouterStatus,
     /// Nodes that announced themselves but are not yet admitted.
-    /// Key = cert CN (e.g. "testuser"), value = last-seen Instant.
     pub pending: HashMap<String, Instant>,
     /// Admitted CNs — the ACL allowlist.
     pub admitted: Vec<String>,
@@ -15,10 +15,15 @@ pub struct AppState {
     pub action_queue: Vec<Action>,
     /// Log lines shown in the GUI.
     pub log: Vec<String>,
+    /// Config written here by the GUI; the background thread consumes it to
+    /// (re-)start the router.
+    pub staged_config: Option<DverseConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RouterStatus {
+    Idle,
+    Acquiring,
     Starting,
     Running,
     Reloading,
@@ -32,14 +37,15 @@ pub enum Action {
 }
 
 impl AppState {
-    pub fn new(pre_admitted: Vec<String>) -> Self {
+    pub fn new(pre_admitted: Vec<String>, initial_config: Option<DverseConfig>) -> Self {
         Self {
-            router_status: RouterStatus::Starting,
+            router_status: RouterStatus::Idle,
             pending: HashMap::new(),
             admitted: pre_admitted,
             denied: Vec::new(),
             action_queue: Vec::new(),
             log: Vec::new(),
+            staged_config: initial_config,
         }
     }
 
