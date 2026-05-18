@@ -7,5 +7,7 @@ members = [
     "experiments/zenoh-ping-pong/ping",
     "experiments/zenoh-ping-pong/pong",
     "src/bot_framework",
-    "src/zenoh_router"
+    "src/zenoh_router",
+    "src/ping",
+    "src/pong"
 ]

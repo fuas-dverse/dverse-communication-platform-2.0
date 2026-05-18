@@ -1248,6 +1248,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "dverse-ping"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bot-framework",
+ "tokio",
+ "zenoh",
+]
+
+[[package]]
+name = "dverse-pong"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bot-framework",
+ "tokio",
+ "zenoh",
+]
+
+[[package]]
 name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7162,6 +7182,7 @@ dependencies = [
  "dirs 5.0.1",
  "eframe",
  "egui",
+ "reqwest",
  "serde_json",
  "tokio",
  "zenoh",

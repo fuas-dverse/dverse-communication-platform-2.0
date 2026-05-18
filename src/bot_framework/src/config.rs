@@ -19,7 +19,10 @@ pub struct DverseConfig {
     /// Path to the cached Step-CA root PEM (bootstrapped on first login).
     pub ca_root_pem_path: String,
     pub cert_dir: PathBuf,
+    /// Zenoh listen address for the local router (server side).
     pub router_listen: String,
+    /// Zenoh connect endpoint used by local agents (client side).
+    pub router_endpoint: String,
 }
 
 impl DverseConfig {

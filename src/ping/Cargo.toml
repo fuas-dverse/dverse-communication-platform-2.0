@@ -1,0 +1,14 @@
+[package]
+name = "dverse-ping"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "dverse-ping"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+bot-framework = { path = "../bot_framework" }
+tokio = { version = "1", features = ["full"] }
+zenoh = "1.8.0"

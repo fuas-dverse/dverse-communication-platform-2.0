@@ -4,30 +4,48 @@ use std::time::Duration;
 use eframe::egui;
 use bot_framework::config::DverseConfig;
 
-use crate::constants::{CA_URL, CLIENT_ID, CLIENT_SECRET, KEYCLOAK_REALM, KEYCLOAK_URL, ROUTER_LISTEN};
-use crate::state::{Action, AppState, RouterStatus};
+use crate::constants::{CA_URL, CLIENT_ID, CLIENT_SECRET, KEYCLOAK_ADMIN_PASSWORD, KEYCLOAK_REALM, KEYCLOAK_URL, ROUTER_ENDPOINT, ROUTER_LISTEN};
+use crate::state::{AppState, RouterStatus};
 
-// ── Screen state (lives on the GUI thread only) ────────────────────────────────
+// ── Screen state (GUI thread only) ─────────────────────────────────────────────
 
 pub enum Screen {
-    Setup(SetupForm),
-    /// Config submitted; waiting for the background thread to become Running.
+    Login(LoginForm),
+    Register(RegisterForm),
     Loading,
     Main,
 }
 
-pub struct SetupForm {
+pub struct LoginForm {
     pub username: String,
     pub password: String,
     pub error: Option<String>,
 }
 
-impl Default for SetupForm {
+impl Default for LoginForm {
+    fn default() -> Self {
+        Self { username: String::new(), password: String::new(), error: None }
+    }
+}
+
+pub struct RegisterForm {
+    pub username: String,   // chosen username (becomes Keycloak username + email prefix)
+    pub password: String,
+    pub confirm: String,
+    pub error: Option<String>,
+    pub working: bool,
+    pub success: Option<String>,
+}
+
+impl Default for RegisterForm {
     fn default() -> Self {
         Self {
             username: String::new(),
             password: String::new(),
+            confirm: String::new(),
             error: None,
+            working: false,
+            success: None,
         }
     }
 }
@@ -49,14 +67,11 @@ impl eframe::App for RouterApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint_after(Duration::from_millis(200));
 
-        // Watch for background-thread transitions.
         let status = self.state.lock().unwrap().router_status.clone();
 
+        // Screen transitions driven by background thread status.
         match &self.screen {
-            Screen::Setup(_) => {
-                // If the background thread just received staged_config, switch to Loading.
-                // (staged_config is consumed by the background thread, so we detect the
-                //  transition via router_status leaving Idle.)
+            Screen::Login(_) | Screen::Register(_) => {
                 if !matches!(status, RouterStatus::Idle) {
                     self.screen = Screen::Loading;
                 }
@@ -64,8 +79,9 @@ impl eframe::App for RouterApp {
             Screen::Loading => match &status {
                 RouterStatus::Running => self.screen = Screen::Main,
                 RouterStatus::Error(msg) => {
-                    let error = Some(msg.clone());
-                    self.screen = Screen::Setup(SetupForm { error, ..SetupForm::default() });
+                    let mut form = LoginForm::default();
+                    form.error = Some(msg.clone());
+                    self.screen = Screen::Login(form);
                 }
                 _ => {}
             },
@@ -73,19 +89,30 @@ impl eframe::App for RouterApp {
         }
 
         match &mut self.screen {
-            Screen::Setup(form) => show_setup(ctx, &mut self.state, form),
+            Screen::Login(form) => {
+                if let Some(next) = show_login(ctx, &mut self.state, form) {
+                    self.screen = next;
+                }
+            }
+            Screen::Register(form) => {
+                if let Some(next) = show_register(ctx, form) {
+                    self.screen = next;
+                }
+            }
             Screen::Loading => show_loading(ctx, &self.state),
             Screen::Main => show_main(ctx, &mut self.state),
         }
     }
 }
 
-// ── Setup screen ───────────────────────────────────────────────────────────────
+// ── Login screen ───────────────────────────────────────────────────────────────
 
-fn show_setup(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>, form: &mut SetupForm) {
+/// Returns `Some(Screen)` to transition to, or `None` to stay.
+fn show_login(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>, form: &mut LoginForm) -> Option<Screen> {
+    let mut next: Option<Screen> = None;
+
     egui::CentralPanel::default().show(ctx, |ui| {
-        // Centre the card vertically.
-        let top_pad = (ui.available_height() - 280.0).max(0.0) / 2.0;
+        let top_pad = (ui.available_height() - 320.0).max(0.0) / 2.0;
         ui.add_space(top_pad);
 
         ui.vertical_centered(|ui| {
@@ -99,7 +126,7 @@ fn show_setup(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>, form: &mut 
                 .spacing([12.0, 8.0])
                 .show(ui, |ui| {
                     ui.label("Username");
-                    ui.add(
+                    let r = ui.add(
                         egui::TextEdit::singleline(&mut form.username)
                             .hint_text("you@dverse.yordanmitev.me")
                             .min_size(egui::vec2(260.0, 0.0)),
@@ -107,12 +134,17 @@ fn show_setup(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>, form: &mut 
                     ui.end_row();
 
                     ui.label("Password");
-                    ui.add(
+                    let p = ui.add(
                         egui::TextEdit::singleline(&mut form.password)
                             .password(true)
                             .min_size(egui::vec2(260.0, 0.0)),
                     );
                     ui.end_row();
+
+                    // Submit on Enter in any field.
+                    if (r.lost_focus() || p.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        try_login(form, state);
+                    }
                 });
 
             ui.add_space(16.0);
@@ -122,12 +154,15 @@ fn show_setup(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>, form: &mut 
                 ui.add_space(8.0);
             }
 
-            if ui.button("  Connect  ").clicked() {
-                match build_and_submit(form, state) {
-                    Ok(()) => form.error = None,
-                    Err(e) => form.error = Some(e),
+            ui.horizontal(|ui| {
+                if ui.button("  Sign in  ").clicked() {
+                    try_login(form, state);
                 }
-            }
+                ui.add_space(12.0);
+                if ui.button("Register").clicked() {
+                    next = Some(Screen::Register(RegisterForm::default()));
+                }
+            });
 
             ui.add_space(24.0);
             ui.separator();
@@ -143,20 +178,18 @@ fn show_setup(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>, form: &mut 
                 });
         });
     });
+
+    next
 }
 
-fn info_row(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.weak(label);
-    ui.weak(value);
-    ui.end_row();
-}
-
-fn build_and_submit(form: &SetupForm, state: &Arc<Mutex<AppState>>) -> Result<(), String> {
+fn try_login(form: &mut LoginForm, state: &Arc<Mutex<AppState>>) {
     if form.username.is_empty() {
-        return Err("Username is required.".into());
+        form.error = Some("Username is required.".into());
+        return;
     }
     if form.password.is_empty() {
-        return Err("Password is required.".into());
+        form.error = Some("Password is required.".into());
+        return;
     }
 
     let cert_dir = dirs::data_local_dir()
@@ -175,15 +208,212 @@ fn build_and_submit(form: &SetupForm, state: &Arc<Mutex<AppState>>) -> Result<()
         ca_root_pem_path: DverseConfig::ca_root_pem_path_default(),
         cert_dir,
         router_listen: ROUTER_LISTEN.into(),
+        router_endpoint: ROUTER_ENDPOINT.into(),
     };
 
-    cfg.save().map_err(|e| e.to_string())?;
+    if let Err(e) = cfg.save() {
+        form.error = Some(e.to_string());
+        return;
+    }
 
     let mut st = state.lock().unwrap();
     st.push_log(format!("Signed in as {}. Bootstrapping…", cfg.username));
     st.staged_config = Some(cfg);
+    form.error = None;
+}
 
+// ── Register screen ────────────────────────────────────────────────────────────
+
+fn show_register(ctx: &egui::Context, form: &mut RegisterForm) -> Option<Screen> {
+    let mut next: Option<Screen> = None;
+
+    egui::CentralPanel::default().show(ctx, |ui| {
+        let top_pad = (ui.available_height() - 360.0).max(0.0) / 2.0;
+        ui.add_space(top_pad);
+
+        ui.vertical_centered(|ui| {
+            ui.heading("Create a dverse account");
+            ui.add_space(4.0);
+            ui.weak(format!("Your account will be created on {KEYCLOAK_URL}"));
+            ui.add_space(20.0);
+
+            egui::Grid::new("register_grid")
+                .num_columns(2)
+                .spacing([12.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("Username");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut form.username)
+                            .hint_text("alice")
+                            .min_size(egui::vec2(260.0, 0.0)),
+                    );
+                    ui.end_row();
+
+                    ui.label("Password");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut form.password)
+                            .password(true)
+                            .min_size(egui::vec2(260.0, 0.0)),
+                    );
+                    ui.end_row();
+
+                    ui.label("Confirm");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut form.confirm)
+                            .password(true)
+                            .min_size(egui::vec2(260.0, 0.0)),
+                    );
+                    ui.end_row();
+                });
+
+            ui.add_space(16.0);
+
+            if let Some(err) = &form.error {
+                ui.colored_label(egui::Color32::RED, err);
+                ui.add_space(8.0);
+            }
+            if let Some(ok) = &form.success {
+                ui.colored_label(egui::Color32::GREEN, ok);
+                ui.add_space(8.0);
+            }
+
+            ui.horizontal(|ui| {
+                let btn = ui.add_enabled(!form.working, egui::Button::new("  Create account  "));
+                if btn.clicked() {
+                    form.error = None;
+                    form.success = None;
+                    match validate_registration(form) {
+                        Ok(()) => {
+                            form.working = true;
+                            // Synchronous call — runs on GUI thread, acceptable for a local tool.
+                            match register_user(&form.username, &form.password) {
+                                Ok(()) => {
+                                    form.success = Some(format!(
+                                        "Account '{}' created. You can now sign in.",
+                                        form.username
+                                    ));
+                                    form.working = false;
+                                }
+                                Err(e) => {
+                                    form.error = Some(e);
+                                    form.working = false;
+                                }
+                            }
+                        }
+                        Err(e) => form.error = Some(e),
+                    }
+                }
+
+                ui.add_space(12.0);
+                if ui.button("Back to sign in").clicked() {
+                    next = Some(Screen::Login(LoginForm {
+                        username: form.username.clone(),
+                        ..Default::default()
+                    }));
+                }
+            });
+        });
+    });
+
+    next
+}
+
+fn validate_registration(form: &RegisterForm) -> Result<(), String> {
+    if form.username.is_empty() {
+        return Err("Username is required.".into());
+    }
+    if form.username.contains('@') || form.username.contains(' ') {
+        return Err("Username must not contain '@' or spaces.".into());
+    }
+    if form.password.len() < 8 {
+        return Err("Password must be at least 8 characters.".into());
+    }
+    if form.password != form.confirm {
+        return Err("Passwords do not match.".into());
+    }
     Ok(())
+}
+
+/// Create a Keycloak user via the Admin REST API using the hardcoded admin credentials.
+fn register_user(username: &str, password: &str) -> Result<(), String> {
+    // Keycloak Admin REST API is synchronous-friendly via blocking reqwest.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    rt.block_on(async move {
+        register_user_async(username, password).await
+    })
+}
+
+async fn register_user_async(username: &str, password: &str) -> Result<(), String> {
+    let client = reqwest::Client::new();
+
+    // 1. Obtain an admin access token.
+    let token_url = format!("{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token");
+    let token_resp = client
+        .post(&token_url)
+        .form(&[
+            ("client_id", "admin-cli"),
+            ("grant_type", "password"),
+            ("username", "admin"),
+            ("password", KEYCLOAK_ADMIN_PASSWORD),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Token request failed: {e}"))?;
+
+    let status = token_resp.status();
+    let body = token_resp.text().await.unwrap_or_default();
+
+    if !status.is_success() {
+        return Err(format!("Admin login failed ({status}): {body}"));
+    }
+
+    let token: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("Token parse error: {e}"))?;
+    let access_token = token["access_token"]
+        .as_str()
+        .ok_or("No access_token in response")?
+        .to_string();
+
+    // 2. Create the user.
+    let email = format!("{username}@dverse.yordanmitev.me");
+    let users_url = format!("{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}/users");
+
+    let user_payload = serde_json::json!({
+        "username": username,
+        "email": email,
+        "emailVerified": true,
+        "enabled": true,
+        "credentials": [{
+            "type": "password",
+            "value": password,
+            "temporary": false
+        }]
+    });
+
+    let create_resp = client
+        .post(&users_url)
+        .bearer_auth(&access_token)
+        .json(&user_payload)
+        .send()
+        .await
+        .map_err(|e| format!("User creation request failed: {e}"))?;
+
+    let status = create_resp.status();
+    if status.is_success() || status.as_u16() == 201 {
+        Ok(())
+    } else {
+        let body = create_resp.text().await.unwrap_or_default();
+        // Keycloak returns {"errorMessage": "..."} on conflict etc.
+        let msg = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v["errorMessage"].as_str().map(str::to_string))
+            .unwrap_or_else(|| format!("HTTP {status}: {body}"));
+        Err(msg)
+    }
 }
 
 // ── Loading screen ─────────────────────────────────────────────────────────────
@@ -194,7 +424,6 @@ fn show_loading(ctx: &egui::Context, state: &Arc<Mutex<AppState>>) {
         ui.vertical_centered(|ui| {
             ui.heading("Connecting…");
             ui.add_space(12.0);
-
             let st = state.lock().unwrap();
             if let Some(last) = st.log.last() {
                 ui.label(last);
@@ -206,18 +435,18 @@ fn show_loading(ctx: &egui::Context, state: &Arc<Mutex<AppState>>) {
 // ── Main screen ────────────────────────────────────────────────────────────────
 
 fn show_main(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>) {
-    let mut st = state.lock().unwrap();
+    let st = state.lock().unwrap();
 
     egui::TopBottomPanel::top("status_bar").show(ctx, |ui| {
         ui.horizontal(|ui| {
             ui.label("Router:");
             match &st.router_status {
-                RouterStatus::Idle => { ui.label("Idle"); }
+                RouterStatus::Idle     => { ui.label("Idle"); }
                 RouterStatus::Acquiring => { ui.colored_label(egui::Color32::YELLOW, "Acquiring cert…"); }
-                RouterStatus::Starting => { ui.colored_label(egui::Color32::YELLOW, "Starting…"); }
-                RouterStatus::Running => { ui.colored_label(egui::Color32::GREEN, "Running"); }
+                RouterStatus::Starting  => { ui.colored_label(egui::Color32::YELLOW, "Starting…"); }
+                RouterStatus::Running   => { ui.colored_label(egui::Color32::GREEN,  "Running"); }
                 RouterStatus::Reloading => { ui.colored_label(egui::Color32::YELLOW, "Reloading ACL…"); }
-                RouterStatus::Error(msg) => { ui.colored_label(egui::Color32::RED, format!("Error: {msg}")); }
+                RouterStatus::Error(m)  => { ui.colored_label(egui::Color32::RED,    format!("Error: {m}")); }
             }
         });
     });
@@ -237,54 +466,26 @@ fn show_main(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>) {
         });
 
     egui::CentralPanel::default().show(ctx, |ui| {
-        ui.columns(2, |cols| {
-            cols[0].heading("Pending");
-            let pending_cns: Vec<String> = st.pending.keys().cloned().collect();
-            if pending_cns.is_empty() {
-                cols[0].label("(none)");
-            } else {
-                let mut admit_cn: Option<String> = None;
-                let mut deny_cn: Option<String> = None;
-                for cn in &pending_cns {
-                    cols[0].horizontal(|ui| {
-                        ui.label(cn);
-                        if ui.button("Admit").clicked() {
-                            admit_cn = Some(cn.clone());
-                        }
-                        if ui.button("Deny").clicked() {
-                            deny_cn = Some(cn.clone());
-                        }
-                    });
-                }
-                if let Some(cn) = admit_cn {
-                    st.action_queue.push(Action::Admit(cn));
-                }
-                if let Some(cn) = deny_cn {
-                    st.action_queue.push(Action::Deny(cn));
-                }
+        ui.heading("Connected nodes");
+        ui.add_space(6.0);
+        if st.admitted.is_empty() {
+            ui.weak("Waiting for nodes to connect…");
+        } else {
+            for cn in &st.admitted {
+                ui.horizontal(|ui| {
+                    ui.colored_label(egui::Color32::GREEN, "●");
+                    ui.label(cn);
+                });
             }
-
-            cols[1].heading("Admitted");
-            if st.admitted.is_empty() {
-                cols[1].label("(none)");
-            } else {
-                for cn in &st.admitted {
-                    cols[1].label(cn);
-                }
-            }
-
-            cols[1].add_space(12.0);
-            cols[1].heading("Denied");
-            if st.denied.is_empty() {
-                cols[1].label("(none)");
-            } else {
-                for cn in &st.denied {
-                    cols[1].colored_label(egui::Color32::LIGHT_RED, cn);
-                }
-            }
-        });
+        }
     });
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+fn info_row(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.weak(label);
+    ui.weak(value);
+    ui.end_row();
+}
 
