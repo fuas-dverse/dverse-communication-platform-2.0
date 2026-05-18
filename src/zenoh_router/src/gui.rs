@@ -4,6 +4,7 @@ use std::time::Duration;
 use eframe::egui;
 use bot_framework::config::DverseConfig;
 
+use crate::constants::{CA_URL, CLIENT_ID, CLIENT_SECRET, KEYCLOAK_REALM, KEYCLOAK_URL, ROUTER_LISTEN};
 use crate::state::{Action, AppState, RouterStatus};
 
 // ── Screen state (lives on the GUI thread only) ────────────────────────────────
@@ -16,14 +17,16 @@ pub enum Screen {
 }
 
 pub struct SetupForm {
-    pub cfg: DverseConfig,
+    pub username: String,
+    pub password: String,
     pub error: Option<String>,
 }
 
 impl Default for SetupForm {
     fn default() -> Self {
         Self {
-            cfg: DverseConfig::default(),
+            username: String::new(),
+            password: String::new(),
             error: None,
         }
     }
@@ -81,111 +84,104 @@ impl eframe::App for RouterApp {
 
 fn show_setup(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>, form: &mut SetupForm) {
     egui::CentralPanel::default().show(ctx, |ui| {
-        ui.heading("dverse — first-time setup");
-        ui.add_space(8.0);
+        // Centre the card vertically.
+        let top_pad = (ui.available_height() - 280.0).max(0.0) / 2.0;
+        ui.add_space(top_pad);
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            egui::Grid::new("setup_grid")
+        ui.vertical_centered(|ui| {
+            ui.heading("Sign in to dverse");
+            ui.add_space(4.0);
+            ui.weak(format!("Connecting to {KEYCLOAK_URL}"));
+            ui.add_space(20.0);
+
+            egui::Grid::new("login_grid")
                 .num_columns(2)
-                .spacing([12.0, 6.0])
+                .spacing([12.0, 8.0])
                 .show(ui, |ui| {
-                    section_header(ui, "Account");
+                    ui.label("Username");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut form.username)
+                            .hint_text("you@dverse.yordanmitev.me")
+                            .min_size(egui::vec2(260.0, 0.0)),
+                    );
+                    ui.end_row();
 
-                    row(ui, "Username (email)", |ui| {
-                        ui.text_edit_singleline(&mut form.cfg.username);
-                    });
-                    row(ui, "Password", |ui| {
-                        ui.add(egui::TextEdit::singleline(&mut form.cfg.password).password(true));
-                    });
-
-                    section_header(ui, "Keycloak");
-
-                    row(ui, "Keycloak URL", |ui| {
-                        ui.text_edit_singleline(&mut form.cfg.keycloak_url);
-                    });
-                    row(ui, "Realm", |ui| {
-                        ui.text_edit_singleline(&mut form.cfg.keycloak_realm);
-                    });
-                    row(ui, "Client ID", |ui| {
-                        ui.text_edit_singleline(&mut form.cfg.client_id);
-                    });
-                    row(ui, "Client Secret", |ui| {
-                        ui.add(egui::TextEdit::singleline(&mut form.cfg.client_secret).password(true));
-                    });
-
-                    section_header(ui, "Step-CA");
-
-                    row(ui, "CA URL", |ui| {
-                        ui.text_edit_singleline(&mut form.cfg.ca_url);
-                    });
-                    row(ui, "CA Root PEM path", |ui| {
-                        ui.text_edit_singleline(&mut form.cfg.ca_root_pem_path);
-                    });
-
-                    section_header(ui, "Router");
-
-                    row(ui, "Listen address", |ui| {
-                        ui.text_edit_singleline(&mut form.cfg.router_listen);
-                    });
-                    row(ui, "Cert cache dir", |ui| {
-                        let mut s = form.cfg.cert_dir.to_string_lossy().into_owned();
-                        if ui.text_edit_singleline(&mut s).changed() {
-                            form.cfg.cert_dir = s.into();
-                        }
-                    });
+                    ui.label("Password");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut form.password)
+                            .password(true)
+                            .min_size(egui::vec2(260.0, 0.0)),
+                    );
+                    ui.end_row();
                 });
 
-            ui.add_space(12.0);
+            ui.add_space(16.0);
 
             if let Some(err) = &form.error {
                 ui.colored_label(egui::Color32::RED, err);
-                ui.add_space(6.0);
+                ui.add_space(8.0);
             }
 
-            if ui.button("Save & Connect").clicked() {
-                match validate_and_submit(&form.cfg, state) {
-                    Ok(()) => {
-                        // Transition handled by the caller via Screen::Loading.
-                        // We signal the parent by setting a sentinel on form.error.
-                        form.error = None;
-                    }
+            if ui.button("  Connect  ").clicked() {
+                match build_and_submit(form, state) {
+                    Ok(()) => form.error = None,
                     Err(e) => form.error = Some(e),
                 }
             }
+
+            ui.add_space(24.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            egui::Grid::new("info_grid")
+                .num_columns(2)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    info_row(ui, "Identity provider", KEYCLOAK_URL);
+                    info_row(ui, "Certificate authority", CA_URL);
+                    info_row(ui, "Router listens on", ROUTER_LISTEN);
+                });
         });
     });
-
-    // If submission succeeded, switch the screen from the outside.
-    // We detect success by checking staged_config was just set.
-    if state.lock().unwrap().staged_config.is_some() {
-        // This won't actually run here — the borrow of `self.screen` prevents it.
-        // The caller (RouterApp::update) handles the screen switch after this fn returns.
-        // We leave a marker so the update loop sees it via router_status.
-    }
 }
 
-fn validate_and_submit(cfg: &DverseConfig, state: &Arc<Mutex<AppState>>) -> Result<(), String> {
-    if cfg.username.is_empty() {
+fn info_row(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.weak(label);
+    ui.weak(value);
+    ui.end_row();
+}
+
+fn build_and_submit(form: &SetupForm, state: &Arc<Mutex<AppState>>) -> Result<(), String> {
+    if form.username.is_empty() {
         return Err("Username is required.".into());
     }
-    if cfg.password.is_empty() {
+    if form.password.is_empty() {
         return Err("Password is required.".into());
     }
-    if cfg.client_secret.is_empty() {
-        return Err("Client secret is required.".into());
-    }
-    if cfg.ca_root_pem_path.is_empty() {
-        return Err("CA root PEM path is required.".into());
-    }
-    if !std::path::Path::new(&cfg.ca_root_pem_path).exists() {
-        return Err(format!("CA root PEM not found: {}", cfg.ca_root_pem_path));
-    }
+
+    let cert_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("dverse")
+        .join("certs");
+
+    let cfg = DverseConfig {
+        username: form.username.clone(),
+        password: form.password.clone(),
+        keycloak_url: KEYCLOAK_URL.into(),
+        keycloak_realm: KEYCLOAK_REALM.into(),
+        client_id: CLIENT_ID.into(),
+        client_secret: CLIENT_SECRET.into(),
+        ca_url: CA_URL.into(),
+        ca_root_pem_path: DverseConfig::ca_root_pem_path_default(),
+        cert_dir,
+        router_listen: ROUTER_LISTEN.into(),
+    };
 
     cfg.save().map_err(|e| e.to_string())?;
 
     let mut st = state.lock().unwrap();
-    st.push_log(format!("Config saved for {}. Acquiring certificate…", cfg.username));
-    st.staged_config = Some(cfg.clone());
+    st.push_log(format!("Signed in as {}. Bootstrapping…", cfg.username));
+    st.staged_config = Some(cfg);
 
     Ok(())
 }
@@ -292,13 +288,3 @@ fn show_main(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn section_header(ui: &mut egui::Ui, label: &str) {
-    ui.strong(label);
-    ui.end_row();
-}
-
-fn row(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egui::Ui)) {
-    ui.label(label);
-    content(ui);
-    ui.end_row();
-}

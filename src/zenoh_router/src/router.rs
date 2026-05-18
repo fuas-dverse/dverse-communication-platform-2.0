@@ -31,11 +31,24 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
             }
         };
 
-        // ── Phase 2: acquire/reuse cert ──────────────────────────────────────
+        // ── Phase 2: bootstrap CA root, then acquire/reuse cert ─────────────
         {
             let mut s = state.lock().unwrap();
             s.router_status = RouterStatus::Acquiring;
-            s.push_log("Checking router certificate…");
+            s.push_log("Bootstrapping CA root certificate…");
+        }
+
+        let ca_root_path = std::path::PathBuf::from(&cfg.ca_root_pem_path);
+        if let Err(e) = cert::bootstrap_ca_root(&cfg.ca_url, &ca_root_path).await {
+            let mut s = state.lock().unwrap();
+            s.router_status = RouterStatus::Error(e.to_string());
+            s.push_log(format!("CA bootstrap error: {e}"));
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+
+        {
+            state.lock().unwrap().push_log("Checking router certificate…");
         }
 
         let cert_result = acquire_or_reuse(&cfg).await;
@@ -215,22 +228,60 @@ fn build_zenoh_config(
 fn build_acl_json(admitted: &[String]) -> String {
     let announce_key = "dverse/nodes/announce/**";
     let main_key = "dverse/**";
-
-    let admitted_subjects: String = admitted
-        .iter()
-        .enumerate()
-        .map(|(i, cn)| format!(r#"{{"id": {}, "cert_common_names": ["{cn}"]}}"#, i + 2))
-        .collect::<Vec<_>>()
-        .join(",");
+    let announce_msgs = serde_json::json!(["put", "delete", "declare_subscriber"]);
+    let main_msgs = serde_json::json!(["put", "delete", "declare_subscriber", "query", "reply", "declare_queryable"]);
 
     if admitted.is_empty() {
-        format!(
-            r#"{{"enabled":true,"default_permission":"deny","rules":[{{"id":1,"messages":["put","declare_subscriber"],"flows":["ingress","egress"],"permission":"allow","key_exprs":["{announce_key}"],"subject":{{"interfaces":["all"]}}}}]}}"#
-        )
+        serde_json::json!({
+            "enabled": true,
+            "default_permission": "deny",
+            "rules": [
+                {
+                    "id": "announce-rule",
+                    "messages": announce_msgs,
+                    "flows": ["ingress", "egress"],
+                    "permission": "allow",
+                    "key_exprs": [announce_key]
+                }
+            ],
+            "subjects": [
+                { "id": "any" }
+            ],
+            "policies": [
+                { "rules": ["announce-rule"], "subjects": ["any"] }
+            ]
+        })
+        .to_string()
     } else {
-        format!(
-            r#"{{"enabled":true,"default_permission":"deny","rules":[{{"id":1,"messages":["put","declare_subscriber"],"flows":["ingress","egress"],"permission":"allow","key_exprs":["{announce_key}"],"subject":{{"interfaces":["all"]}}}},{{"id":2,"messages":["put","declare_subscriber","declare_queryable","get"],"flows":["ingress","egress"],"permission":"allow","key_exprs":["{main_key}"],"subject":{{"and":[{admitted_subjects}]}}}}]}}"#
-        )
+        serde_json::json!({
+            "enabled": true,
+            "default_permission": "deny",
+            "rules": [
+                {
+                    "id": "announce-rule",
+                    "messages": announce_msgs,
+                    "flows": ["ingress", "egress"],
+                    "permission": "allow",
+                    "key_exprs": [announce_key]
+                },
+                {
+                    "id": "main-rule",
+                    "messages": main_msgs,
+                    "flows": ["ingress", "egress"],
+                    "permission": "allow",
+                    "key_exprs": [main_key]
+                }
+            ],
+            "subjects": [
+                { "id": "any" },
+                { "id": "admitted", "cert_common_names": admitted }
+            ],
+            "policies": [
+                { "rules": ["announce-rule"], "subjects": ["any"] },
+                { "rules": ["main-rule"], "subjects": ["admitted"] }
+            ]
+        })
+        .to_string()
     }
 }
 
