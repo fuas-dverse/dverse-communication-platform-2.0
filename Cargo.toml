@@ -4,5 +4,6 @@ members = [
     "experiments/mini-ls-application",
     "experiments/zenoh-chat-abel",
     "experiments/zenoh-ping-pong/ping",
-    "experiments/zenoh-ping-pong/pong"
+    "experiments/zenoh-ping-pong/pong",
+    "src/bot_framework"
 ]
