@@ -122,7 +122,7 @@ struct SignRequest {
 struct SignResponse {
     crt: Option<String>,
     ca: Option<String>,
-    error: Option<String>,
+    // Step-CA returns "message" on errors
     message: Option<String>,
 }
 
@@ -144,15 +144,9 @@ async fn sign_with_step_ca(cfg: &CertConfig, client: &Client, csr_pem: &str, id_
         .await
         .context("parsing Step-CA sign response")?;
 
-    if let Some(err) = resp.error {
-        bail!(
-            "Step-CA error: {} — {}",
-            err,
-            resp.message.unwrap_or_default()
-        );
-    }
-
-    let cert_pem = resp.crt.context("Step-CA response missing 'crt'")?;
+    let cert_pem = resp.crt.with_context(|| {
+        format!("Step-CA response missing 'crt': {}", resp.message.unwrap_or_default())
+    })?;
     let ca_pem = resp.ca.unwrap_or_default();
     Ok((cert_pem, ca_pem))
 }
