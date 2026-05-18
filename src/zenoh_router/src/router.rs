@@ -1,143 +1,76 @@
-use anyhow::Result;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use anyhow::Result;
+use bot_framework::cert;
+use bot_framework::config::DverseConfig;
 use zenoh::Session;
 
 use crate::state::{Action, AppState, RouterStatus};
 
-pub struct RouterConfig {
-    pub listen_addr: String,
-    pub tls_ca: Option<String>,
-    pub tls_cert: Option<String>,
-    pub tls_key: Option<String>,
-}
+/// Background entry point.  Waits for a `DverseConfig` to appear in AppState,
+/// acquires/reuses the router cert, then runs the Zenoh router indefinitely,
+/// restarting the session whenever the admitted ACL changes.
+pub async fn run(state: Arc<Mutex<AppState>>) {
+    let mut current_cfg: Option<DverseConfig> = None;
 
-/// Build a Zenoh router config with the given admitted CNs baked into the ACL.
-fn build_config(rc: &RouterConfig, admitted: &[String]) -> Result<zenoh::Config> {
-    let mut cfg = zenoh::Config::default();
-
-    zinsert(&mut cfg, "mode", "\"router\"")?;
-    zinsert(
-        &mut cfg,
-        "listen/endpoints",
-        &format!("[\"{}\"]", rc.listen_addr),
-    )?;
-    zinsert(&mut cfg, "scouting/multicast/enabled", "false")?;
-
-    if let Some(ca) = &rc.tls_ca {
-        zinsert(&mut cfg, "transport/link/tls/root_ca_certificate", &json_str(ca))?;
-    }
-    if rc.tls_cert.is_some() || rc.tls_key.is_some() {
-        zinsert(&mut cfg, "transport/link/tls/enable_mtls", "true")?;
-    }
-    if let Some(cert) = &rc.tls_cert {
-        zinsert(&mut cfg, "transport/link/tls/listen_certificate", &json_str(cert))?;
-    }
-    if let Some(key) = &rc.tls_key {
-        zinsert(&mut cfg, "transport/link/tls/listen_private_key", &json_str(key))?;
-    }
-
-    let acl = build_acl_json(admitted);
-    zinsert(&mut cfg, "access_control", &acl)?;
-
-    Ok(cfg)
-}
-
-/// Generate ACL JSON that:
-///  - allows everyone to publish/subscribe on `dverse/nodes/announce/**`
-///  - allows only admitted CNs to publish/subscribe on `dverse/**`
-///  - denies everything else by default
-fn build_acl_json(admitted: &[String]) -> String {
-    let announce_key = "dverse/nodes/announce/**";
-    let main_key = "dverse/**";
-
-    // Subject for the announce key — allow any authenticated peer.
-    let announce_subject = r#"{"interfaces": ["all"]}"#;
-
-    // Subjects for admitted CNs.
-    let admitted_subjects: String = admitted
-        .iter()
-        .enumerate()
-        .map(|(i, cn)| {
-            format!(
-                r#"{{ "id": {id}, "cert_common_names": ["{cn}"] }}"#,
-                id = i + 2,
-                cn = cn
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-
-    if admitted.is_empty() {
-        // Only the announce key is open; nothing else is admitted yet.
-        format!(
-            r#"{{
-  "enabled": true,
-  "default_permission": "deny",
-  "rules": [
-    {{
-      "id": 1,
-      "messages": ["put", "declare_subscriber"],
-      "flows": ["ingress", "egress"],
-      "permission": "allow",
-      "key_exprs": ["{announce_key}"],
-      "subject": {announce_subject}
-    }}
-  ]
-}}"#
-        )
-    } else {
-        format!(
-            r#"{{
-  "enabled": true,
-  "default_permission": "deny",
-  "rules": [
-    {{
-      "id": 1,
-      "messages": ["put", "declare_subscriber"],
-      "flows": ["ingress", "egress"],
-      "permission": "allow",
-      "key_exprs": ["{announce_key}"],
-      "subject": {announce_subject}
-    }},
-    {{
-      "id": 2,
-      "messages": ["put", "declare_subscriber", "declare_queryable", "get"],
-      "flows": ["ingress", "egress"],
-      "permission": "allow",
-      "key_exprs": ["{main_key}"],
-      "subject": {{ "and": [{admitted_subjects}] }}
-    }}
-  ]
-}}"#
-        )
-    }
-}
-
-/// Background task: open the router session, subscribe to announces, process the
-/// action queue.  Restarts the session whenever the admitted list changes.
-pub async fn run(rc: RouterConfig, state: Arc<Mutex<AppState>>) {
     loop {
-        let admitted = {
-            let s = state.lock().unwrap();
-            s.admitted.clone()
+        // ── Phase 1: obtain config ───────────────────────────────────────────
+        let cfg = if let Some(c) = current_cfg.take() {
+            c
+        } else {
+            state.lock().unwrap().push_log("Waiting for configuration…");
+            loop {
+                {
+                    let mut s = state.lock().unwrap();
+                    if let Some(cfg) = s.staged_config.take() {
+                        break cfg;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
         };
 
+        // ── Phase 2: acquire/reuse cert ──────────────────────────────────────
         {
             let mut s = state.lock().unwrap();
-            s.router_status = RouterStatus::Starting;
-            s.push_log("Building Zenoh router session...");
+            s.router_status = RouterStatus::Acquiring;
+            s.push_log("Checking router certificate…");
         }
 
-        let config = match build_config(&rc, &admitted) {
+        let cert_result = acquire_or_reuse(&cfg).await;
+
+        let (cert_p, key_p, ca_p) = match cert_result {
+            Ok(paths) => paths,
+            Err(e) => {
+                let mut s = state.lock().unwrap();
+                s.router_status = RouterStatus::Error(e.to_string());
+                s.push_log(format!("Certificate error: {e}"));
+                // Don't retry automatically — wait for the user to fix config.
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+        };
+
+        // ── Phase 3: run session loop (restarts on ACL change) ───────────────
+        let admitted = state.lock().unwrap().admitted.clone();
+        let config = match build_zenoh_config(&cfg.router_listen, &ca_p, &cert_p, &key_p, &admitted) {
             Ok(c) => c,
             Err(e) => {
                 let mut s = state.lock().unwrap();
                 s.router_status = RouterStatus::Error(e.to_string());
                 s.push_log(format!("Config error: {e}"));
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                current_cfg = Some(cfg);
                 continue;
             }
         };
+
+        {
+            let mut s = state.lock().unwrap();
+            s.router_status = RouterStatus::Starting;
+            s.push_log(format!("Opening Zenoh router on {}…", cfg.router_listen));
+        }
 
         let session = match zenoh::open(config).await {
             Ok(s) => s,
@@ -145,7 +78,8 @@ pub async fn run(rc: RouterConfig, state: Arc<Mutex<AppState>>) {
                 let mut s = state.lock().unwrap();
                 s.router_status = RouterStatus::Error(e.to_string());
                 s.push_log(format!("Zenoh open error: {e}"));
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                current_cfg = Some(cfg);
                 continue;
             }
         };
@@ -153,32 +87,48 @@ pub async fn run(rc: RouterConfig, state: Arc<Mutex<AppState>>) {
         {
             let mut s = state.lock().unwrap();
             s.router_status = RouterStatus::Running;
-            s.push_log("Router session up.");
+            s.push_log("Router running.");
         }
 
+        // session_loop returns when the admitted list changes.
         if let Err(e) = session_loop(&session, Arc::clone(&state)).await {
-            let mut s = state.lock().unwrap();
-            s.push_log(format!("Session error: {e}"));
+            state.lock().unwrap().push_log(format!("Session error: {e}"));
         }
 
-        // Close the old session before reopening.
         let _ = session.close().await;
 
         {
             let mut s = state.lock().unwrap();
             s.router_status = RouterStatus::Reloading;
-            s.push_log("Reloading router with updated ACL...");
+            s.push_log("Reloading router with updated ACL…");
         }
+
+        current_cfg = Some(cfg);
     }
 }
 
-/// Inner loop: subscribe to announces + drain the action queue.
-/// Returns when the admitted list changes (triggering a session restart).
-async fn session_loop(session: &Session, state: Arc<Mutex<AppState>>) -> Result<()> {
-    let announce_key = "dverse/nodes/announce/**";
+/// Use the cached cert if it is still fresh; otherwise acquire a new one.
+async fn acquire_or_reuse(
+    cfg: &DverseConfig,
+) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)> {
+    let c = cert::cert_path(&cfg.cert_dir, "router");
+    let k = cert::key_path(&cfg.cert_dir, "router");
+    let ca = cert::ca_path(&cfg.cert_dir, "router");
 
+    let max_age = Duration::from_secs(23 * 3600);
+    if cert::needs_renewal(&c, max_age).await {
+        let cert_cfg = cfg.cert_config_for("router")?;
+        cert::acquire(&cert_cfg).await
+    } else {
+        Ok((c, k, ca))
+    }
+}
+
+/// Subscribe to node announce messages and drain the action queue.
+/// Returns when the admitted list changes (signalling a session restart).
+async fn session_loop(session: &Session, state: Arc<Mutex<AppState>>) -> Result<()> {
     let subscriber = session
-        .declare_subscriber(announce_key)
+        .declare_subscriber("dverse/nodes/announce/**")
         .await
         .map_err(|e| anyhow::anyhow!("declare_subscriber: {e}"))?;
 
@@ -189,7 +139,6 @@ async fn session_loop(session: &Session, state: Arc<Mutex<AppState>>) -> Result<
             sample = subscriber.recv_async() => {
                 match sample {
                     Ok(s) => {
-                        // Key is dverse/nodes/announce/<cn>; extract the CN.
                         let key = s.key_expr().as_str().to_string();
                         if let Some(cn) = key.strip_prefix("dverse/nodes/announce/") {
                             let cn = cn.to_string();
@@ -206,7 +155,7 @@ async fn session_loop(session: &Session, state: Arc<Mutex<AppState>>) -> Result<
                     Err(e) => return Err(anyhow::anyhow!("subscriber recv: {e}")),
                 }
             }
-            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {
                 let actions: Vec<Action> = {
                     let mut st = state.lock().unwrap();
                     std::mem::take(&mut st.action_queue)
@@ -233,13 +182,55 @@ async fn session_loop(session: &Session, state: Arc<Mutex<AppState>>) -> Result<
                     }
                 }
 
-                // If the admitted list changed, restart the session with new ACL.
                 let new_admitted = state.lock().unwrap().admitted.clone();
                 if new_admitted != admitted_snapshot {
                     return Ok(());
                 }
             }
         }
+    }
+}
+
+fn build_zenoh_config(
+    listen_addr: &str,
+    ca_path: &std::path::Path,
+    cert_path: &std::path::Path,
+    key_path: &std::path::Path,
+    admitted: &[String],
+) -> Result<zenoh::Config> {
+    let mut cfg = zenoh::Config::default();
+
+    zinsert(&mut cfg, "mode", "\"router\"")?;
+    zinsert(&mut cfg, "listen/endpoints", &format!("[\"{listen_addr}\"]"))?;
+    zinsert(&mut cfg, "scouting/multicast/enabled", "false")?;
+    zinsert(&mut cfg, "transport/link/tls/root_ca_certificate", &json_str(&ca_path.to_string_lossy()))?;
+    zinsert(&mut cfg, "transport/link/tls/enable_mtls", "true")?;
+    zinsert(&mut cfg, "transport/link/tls/listen_certificate", &json_str(&cert_path.to_string_lossy()))?;
+    zinsert(&mut cfg, "transport/link/tls/listen_private_key", &json_str(&key_path.to_string_lossy()))?;
+    zinsert(&mut cfg, "access_control", &build_acl_json(admitted))?;
+
+    Ok(cfg)
+}
+
+fn build_acl_json(admitted: &[String]) -> String {
+    let announce_key = "dverse/nodes/announce/**";
+    let main_key = "dverse/**";
+
+    let admitted_subjects: String = admitted
+        .iter()
+        .enumerate()
+        .map(|(i, cn)| format!(r#"{{"id": {}, "cert_common_names": ["{cn}"]}}"#, i + 2))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    if admitted.is_empty() {
+        format!(
+            r#"{{"enabled":true,"default_permission":"deny","rules":[{{"id":1,"messages":["put","declare_subscriber"],"flows":["ingress","egress"],"permission":"allow","key_exprs":["{announce_key}"],"subject":{{"interfaces":["all"]}}}}]}}"#
+        )
+    } else {
+        format!(
+            r#"{{"enabled":true,"default_permission":"deny","rules":[{{"id":1,"messages":["put","declare_subscriber"],"flows":["ingress","egress"],"permission":"allow","key_exprs":["{announce_key}"],"subject":{{"interfaces":["all"]}}}},{{"id":2,"messages":["put","declare_subscriber","declare_queryable","get"],"flows":["ingress","egress"],"permission":"allow","key_exprs":["{main_key}"],"subject":{{"and":[{admitted_subjects}]}}}}]}}"#
+        )
     }
 }
 

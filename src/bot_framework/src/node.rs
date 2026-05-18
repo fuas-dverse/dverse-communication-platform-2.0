@@ -4,7 +4,7 @@
 //! matching the DNS SAN in the certificate.  The Zenoh router can enforce mTLS
 //! so only nodes with valid CA-signed certificates can join the network.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 use zenoh::Session;
 
