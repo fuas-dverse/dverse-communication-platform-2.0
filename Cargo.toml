@@ -1,9 +1,11 @@
 [workspace]
+resolver = "3"
 members = [
     "experiments/mini-tree-command",
     "experiments/mini-ls-application",
     "experiments/zenoh-chat-abel",
     "experiments/zenoh-ping-pong/ping",
     "experiments/zenoh-ping-pong/pong",
-    "src/bot_framework"
+    "src/bot_framework",
+    "src/zenoh_router"
 ]
