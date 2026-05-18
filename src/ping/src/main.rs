@@ -12,6 +12,7 @@ async fn main() -> Result<()> {
 
     let cert_path = cert::cert_path(&cfg.cert_dir, NODE_NAME);
     let key_path  = cert::key_path(&cfg.cert_dir, NODE_NAME);
+    let ca_path   = cert::ca_path(&cfg.cert_dir, NODE_NAME);
 
     if cert::needs_renewal(&cert_path, Duration::from_secs(23 * 3600)).await {
         println!("[{NODE_NAME}] Acquiring certificate…");
@@ -24,7 +25,7 @@ async fn main() -> Result<()> {
     println!("[{NODE_NAME}] Connecting to {}…", cfg.router_endpoint);
     let session = NodeConfig::mtls(
         &cfg.router_endpoint,
-        &cfg.ca_root_pem_path,
+        &ca_path,
         &cert_path,
         &key_path,
     )
