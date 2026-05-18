@@ -246,7 +246,7 @@ async def _generate_bot_response(
                 bot_name=bot.name,
                 message=triggering_message,
                 history=history,
-                timeout=60.0,
+                timeout=120.0,
             )
         else:
             loop = asyncio.get_event_loop()

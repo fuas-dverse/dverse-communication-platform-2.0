@@ -38,3 +38,9 @@ app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(servers.router, prefix="/servers", tags=["servers"])
 app.include_router(rooms.router, prefix="/rooms", tags=["rooms"])
 app.include_router(messages.router, prefix="/rooms", tags=["messages"])
+
+
+@app.get("/bots/available", tags=["bots"])
+def get_available_bots():
+    from .services.zenoh_bridge import zenoh_bridge
+    return zenoh_bridge.get_available_bots()

@@ -32,14 +32,15 @@ def _messages_to_prompt(messages: list[dict]) -> str:
 def _build_system_prompt(bot: BotConfig) -> str:
     personality_key = BotPersonality(bot.personality)
     base = PERSONALITY_PROMPTS.get(personality_key, PERSONALITY_PROMPTS[BotPersonality.ASSISTANT])
-    now = datetime.now(timezone.utc)
-    today_label = f"{now.date().isoformat()} ({now.strftime('%A')}, UTC)"
-    return (
+    prompt = (
         f"{base}\n\n"
         f"Your name is @{bot.name}. "
         f"Only respond when directly mentioned with @{bot.name}. "
         "Keep responses concise and relevant to the conversation."
     )
+    if bot.system_prompt and bot.system_prompt.strip():
+        prompt += f"\n\nAdditional instructions: {bot.system_prompt.strip()}"
+    return prompt
 
 
 def call_claude(bot: BotConfig, triggering_message: str, history: list[dict]) -> str:

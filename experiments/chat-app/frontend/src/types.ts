@@ -1,4 +1,13 @@
 export type BotProvider = 'claude' | 'local' | 'zenoh'
+
+export interface AvailableBot {
+  name: string
+  description: string
+  platform: string
+  capabilities: string[]
+  last_seen: number
+  online: boolean
+}
 export type BotPersonality = 'assistant' | 'coder' | 'creative' | 'analyst'
 
 export interface BotConfig {
@@ -8,6 +17,8 @@ export interface BotConfig {
   provider: BotProvider
   personality: BotPersonality
   model: string | null
+  system_prompt: string | null
+  added_by: string | null
   created_at: string
 }
 
@@ -16,12 +27,15 @@ export interface BotConfigCreate {
   provider: BotProvider
   personality: BotPersonality
   model?: string | null
+  system_prompt?: string | null
+  token?: string | null
 }
 
 export interface BotConfigUpdate {
   provider?: BotProvider
   personality?: BotPersonality
   model?: string | null
+  system_prompt?: string | null
 }
 
 export interface Room {

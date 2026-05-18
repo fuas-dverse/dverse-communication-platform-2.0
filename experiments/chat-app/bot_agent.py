@@ -29,25 +29,44 @@ Three ways to run — pick one:
 """
 
 import argparse
+import hashlib
 import json
 import os
+import queue
+import secrets
 import signal
 import sys
 import threading
+import time
 
 import zenoh
 
 parser = argparse.ArgumentParser(description="Zenoh Bot Agent")
-parser.add_argument("--name",       default=os.environ.get("BOT_NAME", "mybot"),                   help="Bot handle, must match @name in the room (env: BOT_NAME)")
-parser.add_argument("--router",     default=os.environ.get("ZENOH_ROUTER", "tcp/localhost:7447"),   help="Zenoh router endpoint (env: ZENOH_ROUTER)")
-parser.add_argument("--ollama-url", default=os.environ.get("OLLAMA_URL", "http://localhost:11434"), help="Ollama base URL (env: OLLAMA_URL)")
-parser.add_argument("--model",      default=os.environ.get("OLLAMA_MODEL", "deepseek-r1:1.5b"),    help="Ollama model name (env: OLLAMA_MODEL)")
+parser.add_argument("--name",        default=os.environ.get("BOT_NAME", "mybot"),                   help="Bot handle, must match @name in the room (env: BOT_NAME)")
+parser.add_argument("--router",      default=os.environ.get("ZENOH_ROUTER", "tcp/localhost:7447"),   help="Zenoh router endpoint (env: ZENOH_ROUTER)")
+parser.add_argument("--ollama-url",  default=os.environ.get("OLLAMA_URL", "http://localhost:11434"), help="Ollama base URL (env: OLLAMA_URL)")
+parser.add_argument("--model",       default=os.environ.get("OLLAMA_MODEL", "deepseek-r1:1.5b"),    help="Ollama model name (env: OLLAMA_MODEL)")
+parser.add_argument("--description", default=os.environ.get("BOT_DESCRIPTION", ""),                 help="Short description shown in the bot picker (env: BOT_DESCRIPTION)")
+parser.add_argument("--platform",    default=os.environ.get("BOT_PLATFORM", "zenoh"),               help="Platform identifier e.g. zenoh, slack, teams (env: BOT_PLATFORM)")
+parser.add_argument("--token",       default=os.environ.get("BOT_TOKEN", ""),                       help="Secret token — only users who know this can add the bot (env: BOT_TOKEN)")
 args = parser.parse_args()
 
 BOT_NAME = args.name
 ZENOH_ROUTER = args.router
 OLLAMA_URL = args.ollama_url
 OLLAMA_MODEL = args.model
+BOT_DESCRIPTION = args.description
+BOT_PLATFORM = args.platform
+_raw_token = args.token or secrets.token_hex(16)
+BOT_TOKEN_HASH = hashlib.sha256(_raw_token.encode()).hexdigest()
+
+if not args.token:
+    print(f"[{args.name}] No token set — generated one for this session.")
+    print(f"[{args.name}] Share this token with users who should be able to add this bot:")
+    print(f"[{args.name}]   BOT_TOKEN={_raw_token}")
+    print()
+
+HEARTBEAT_INTERVAL = 30  # seconds
 
 
 # ── LLM call ─────────────────────────────────────────────────────────────────
@@ -71,6 +90,27 @@ def call_llm(message: str, history: list[dict]) -> str:
     return response.json()["message"]["content"]
 
 
+# ── Presence heartbeat ────────────────────────────────────────────────────────
+
+def publish_presence(session):
+    payload = json.dumps({
+        "name": BOT_NAME,
+        "description": BOT_DESCRIPTION,
+        "platform": BOT_PLATFORM,
+        "capabilities": ["chat"],
+        "token_hash": BOT_TOKEN_HASH,
+    }).encode()
+    session.put(f"chat/presence/{BOT_NAME}", payload)
+
+
+def heartbeat_loop(session, stop_event):
+    while not stop_event.wait(HEARTBEAT_INTERVAL):
+        try:
+            publish_presence(session)
+        except Exception as exc:
+            print(f"[{BOT_NAME}] Heartbeat error: {exc}")
+
+
 # ── Zenoh handler ─────────────────────────────────────────────────────────────
 
 def handle_request(data, session):
@@ -86,11 +126,24 @@ def handle_request(data, session):
         session.put(f"chat/response/{request_id}", err_payload.encode())
 
 
+_request_queue: queue.Queue = queue.Queue()
+
+
+def _worker(session):
+    """Single worker thread — serializes all Ollama calls so they don't stack up."""
+    while True:
+        data = _request_queue.get()
+        if data is None:
+            break
+        handle_request(data, session)
+        _request_queue.task_done()
+
+
 def on_request(sample, session):
     try:
         data = json.loads(bytes(sample.payload.to_bytes()).decode("utf-8"))
         print(f"[{BOT_NAME}] Request in room {data['room_id'][:8]}…: {data['message'][:60]}")
-        threading.Thread(target=handle_request, args=(data, session), daemon=True).start()
+        _request_queue.put(data)
     except Exception as exc:
         print(f"[{BOT_NAME}] Failed to parse request: {exc}")
 
@@ -113,11 +166,22 @@ def main():
         lambda sample: on_request(sample, session),
     )
 
+    # Announce presence immediately, then keep a heartbeat going
+    publish_presence(session)
+    stop_event = threading.Event()
+    hb_thread = threading.Thread(target=heartbeat_loop, args=(session, stop_event), daemon=True)
+    hb_thread.start()
+
+    worker_thread = threading.Thread(target=_worker, args=(session,), daemon=True)
+    worker_thread.start()
+
     print(f"@{BOT_NAME} is online. Listening on '{key_expr}'")
     print("Press Ctrl+C to stop.\n")
 
     def shutdown(sig, frame):
         print(f"\nShutting down @{BOT_NAME}...")
+        stop_event.set()
+        _request_queue.put(None)  # signal worker to stop
         sub.undeclare()
         session.close()
         sys.exit(0)
