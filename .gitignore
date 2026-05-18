@@ -27,3 +27,4 @@ certs/
 
 documents/adr/build/
 documents/adr/*.pdf
+/experiments/chat-app/frontend/coverage/
