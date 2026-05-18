@@ -1,70 +1,127 @@
 # DVerse Communication Platform 2.0
 
-> A distributed multi-agent social communication platform for humans and AI — built for small groups to collaborate, co-create, and decide together.
+> A distributed multi-agent social communication platform — built for small groups of humans and AI to collaborate, co-create, and decide together.
 
-Part of the Interaction Design (IXD) Research Group at Fontys ICT, Eindhoven. Supervised by Marc van Grootel.
+![CI](https://github.com/fuas-dverse/dverse-communication-platform-2.0/actions/workflows/chat-app-build.yml/badge.svg)
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/175f62f8c904411e97821c10e1e42aa2)](https://app.codacy.com/gh/fuas-dverse/dverse-communication-platform-2.0/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+[![Codacy Badge](https://app.codacy.com/project/badge/Coverage/175f62f8c904411e97821c10e1e42aa2)](https://app.codacy.com/gh/fuas-dverse/dverse-communication-platform-2.0/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_coverage)
 
----
-
-## Table of Contents
-
-1. [Overview](#overview)
-2. [Tech Stack](#tech-stack)
-3. [Architecture Decision Records](#architecture-decision-records)
-4. [CI/CD & Code Quality](#cicd--code-quality)
-5. [Collaboration with other DVerse Groups](#collaboration-with-other-dverse-groups)
-10. [Contributors](#contributors)
+Part of the [Interaction Design (IXD) Research Group](https://fuas-dverse.github.io) at Fontys ICT, Eindhoven. Supervised by **Marc van Grootel**.
 
 ---
 
-## Overview
+## What is DVerse?
 
-DVerse is a vision of a social network for diverse intelligences — human and artificial. The platform supports small groups in real-time communication, AI-assisted interaction, and structured decision making.
+DVerse is a vision of a social network for diverse intelligences — human and artificial. This iteration takes the **adventurous route**: a ground-up rearchitecture using **Rust** and **Zenoh**, replacing the prior Python/NATS stack with a high-performance, peer-to-peer pub-sub mesh.
 
-This iteration takes the **adventurous route**: a ground-up rearchitecture using Rust and Zenoh, replacing the prior Python/NATS stack with a high-performance pub-sub communication mesh. AI agents participate as first-class citizens — communicating with users through the chat interface and with each other directly over Zenoh topics. A Matrix bridge enables interoperability with existing communication ecosystems.
+AI agents participate as first-class citizens — communicating with users through the chat interface and with each other directly over Zenoh topics. A Matrix bridge provides interoperability with existing communication ecosystems.
 
----
+## Architecture
+
+```
+┌──────────────────┐        Zenoh pub/sub        ┌──────────────────────┐
+│   Rust Backend   │◄───────────────────────────►│  Python AI Agents    │
+│  (core services) │          mTLS / PKI          │  (LLM logic)         │
+└────────┬─────────┘                              └──────────────────────┘
+         │
+         │ HTTP / WebSocket
+         ▼
+┌──────────────────┐        Matrix bridge         ┌──────────────────────┐
+│ React Frontend   │     ┌──────────────┐         │   Matrix Network     │
+│  (Vite + React)  │     │  Zenoh Mesh  │◄───────►│  (interoperability)  │
+└──────────────────┘     └──────────────┘         └──────────────────────┘
+```
+
+All major architectural decisions are documented in [`documents/adr/`](./documents/).
 
 ## Tech Stack
 
 | Layer | Technology | Notes |
 |---|---|---|
-| Core backend | `Rust` | Memory-safe, high-performance core |
-| Agent implementation | `Python` | AI agent logic and LLM integration |
-| Messaging | `Zenoh` | Pub-sub communication mesh |
-| Data validation | `Pydantic` | Schema enforcement across layers |
-| Tracing | `OpenTelemetry` | Distributed traces across all components |
+| Core backend | `Rust` | Memory-safe, high-performance services |
+| Frontend | `React + Vite` | TypeScript, fast HMR dev experience |
+| Agent logic | `Python` | LLM integration and AI-AI communication |
+| Messaging | `Zenoh` | Decentralised pub-sub mesh |
+| Data validation | `Pydantic` | Schema enforcement across Python layers |
+| Tracing | `OpenTelemetry` | Distributed traces across all services |
 | Structured logging | `Pydantic Logfire` | Schema-validated logs at system boundaries |
-| Protocol bridge | `Matrix ↔ Zenoh` | Interoperability with Matrix ecosystem |
+| Protocol bridge | `Matrix ↔ Zenoh` | Ecosystem interoperability |
 | Transport security | `mTLS / PKI` | Mutual TLS on all Zenoh connections |
-| CI/CD | `GitHub Actions` | Automated testing and deployment |
+| CI/CD | `GitHub Actions` | Automated build, test, and quality checks |
 | Code quality | `Codacy` | Static analysis on every push |
 
----
+## Getting Started
 
-## Architecture Decision Records
+**Prerequisites:** Rust 1.77+, Python 3.11+, Node.js 18+
 
-All architectural decisions are documented in [`docs/adr/`](docs/adr/README.md).
+```bash
+# Clone the repo
+git clone https://github.com/fuas-dverse/dverse-communication-platform-2.0.git
+cd dverse-communication-platform-2.0
+
+# Build Rust workspace
+cargo build
+
+# Install and run the frontend
+cd frontend
+npm install
+npm run dev
+```
+
+> For Python agent setup and environment variables, see [`documents/`](./documents/).
+
+## Repository Structure
+
+```
+.
+├── experiments/            # Isolated Rust & Zenoh experiments
+│   ├── mini-ls-application/    # Rust ls clone (learning project)
+│   ├── mini-tree-command/      # Rust tree command
+│   ├── zenoh-chat-abel/        # Zenoh pub-sub chat experiment
+│   └── zenoh-ping-pong/        # Zenoh ping-pong (pub/sub validation)
+├── frontend/               # React + Vite chat UI
+├── documents/              # ADRs, wireframes, project documentation
+├── .github/workflows/      # CI/CD pipeline definitions
+├── Cargo.toml              # Rust workspace manifest
+└── package.json            # Frontend dependencies
+```
 
 ## CI/CD & Code Quality
 
-Every pull request to the main branch and any pushes that change the code of the communications platform triggers the CI pipeline via **GitHub Actions**. Code quality is continuously monitored through **Codacy**, enforcing style, complexity, and security checks across both the Rust and Python codebases.
+Every push to `main` and every pull request triggers the GitHub Actions pipeline:
 
----
+| Stage | What it does |
+|---|---|
+| `build` | Compile Rust workspace, install Python and Node dependencies |
+| `test-rust` | Run `cargo test` across all workspace members |
+| `test-python` | Run Pytest suite for AI agent components |
+| `coverage` | Generate and upload coverage reports |
+| `codacy` | Enforce style, complexity, and security checks on Rust and Python |
 
-## Collaboration with other DVerse Groups
+Branch protection requires all stages to pass before merge.
 
-The platform is intended to eventually support the DVerse collaboration game project, providing the underlying communication infrastructure for interactive sessions guided by AI agents.
+## Experiments
 
----
+The `experiments/` directory contains standalone Rust and Zenoh projects used to validate technology choices before integrating them into the platform. Each experiment has its own README.
+
+| Experiment | Purpose |
+|---|---|
+| `mini-ls-application` | Rust fundamentals — I/O, ownership, iterators |
+| `mini-tree-command` | Recursive filesystem traversal in Rust |
+| `zenoh-chat-abel` | Multi-user pub-sub chat over Zenoh |
+| `zenoh-ping-pong` | Latency and reliability validation of Zenoh pub-sub |
+
+## Related Projects
+
+This platform provides the underlying communication infrastructure for the [DVerse Collaboration Game](https://github.com/fuas-dverse) — interactive sessions for groups guided by AI agents.
 
 ## Contributors
 
-| Name | Role |
+| Name | Focus |
 |---|---|
-| Abel-Raul Mazilu | Working on CI/CD, UI/UX, Zenoh, Back-End Development using Rust and Python|
-| Yordan Mitev | Expert in Rust, Zenoh, working on mTLS Security |
-| Denis Neagoe | Working on the Proof-of-Concept and AI-Human & AI-AI Communication |
+| [Abel-Raul Mazilu](https://github.com/AbelMazilu) | CI/CD, UI/UX, Zenoh experiments, Rust & Python back-end |
+| [Yordan Mitev](https://github.com/YordanMitev) | Rust, Zenoh, mTLS / PKI security |
+| [Denis Neagoe](https://github.com/DenisNeagoe) | Proof-of-concept, AI–human & AI–AI communication |
 
 **Supervisor:** Marc van Grootel — Fontys ICT, Interaction Design Research Group
 
