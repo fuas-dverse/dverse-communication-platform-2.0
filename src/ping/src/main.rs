@@ -31,9 +31,10 @@ async fn main() -> Result<()> {
     .connect()
     .await?;
 
-    println!("[{NODE_NAME}] Connected. Announcing…");
+    let cn = cfg.operator_cn();
+    println!("[{NODE_NAME}] Connected. Announcing as CN={cn}…");
     session
-        .put(format!("dverse/nodes/announce/{NODE_NAME}"), "")
+        .put(format!("dverse/nodes/announce/{NODE_NAME}"), cn)
         .await
         .map_err(|e| anyhow::anyhow!("announce: {e}"))?;
 
