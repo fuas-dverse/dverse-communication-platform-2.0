@@ -57,7 +57,8 @@ export default function ChannelsSidebar({
           personality: botPersonality,
         })
         // Reload room to get bots attached
-        room.bots = [{ id: "", room_id: room.id, name: botName.trim(), provider: botProvider, personality: botPersonality, model: null, created_at: "" }]
+        room.bots = [{ id: "", room_id: room.id, name: botName.trim(), provider: botProvider, personality: botPersonality, model: null, created_at: "", system_prompt: null,
+            added_by: null }]
       }
       onRoomCreated(room)
       resetForm()
