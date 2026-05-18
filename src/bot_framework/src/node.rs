@@ -75,9 +75,6 @@ impl NodeConfig {
 
         if self.tls_cert.is_some() || self.tls_key.is_some() {
             zinsert(&mut config, "transport/link/tls/enable_mtls", "true")?;
-            // The cert CN/SAN reflects the Keycloak username, not the endpoint hostname.
-            // CA signature verification still runs; hostname check adds nothing here.
-            zinsert(&mut config, "transport/link/tls/verify_name_on_connect", "false")?;
         }
 
         if let Some(cert_path) = &self.tls_cert {

@@ -4,7 +4,7 @@ use std::time::Duration;
 use eframe::egui;
 use bot_framework::config::DverseConfig;
 
-use crate::constants::{CA_URL, CLIENT_ID, CLIENT_SECRET, KEYCLOAK_ADMIN_PASSWORD, KEYCLOAK_REALM, KEYCLOAK_URL, ROUTER_ENDPOINT, ROUTER_LISTEN};
+use crate::constants::{CA_URL, CLIENT_ID, CLIENT_SECRET, KEYCLOAK_ADMIN_PASSWORD, KEYCLOAK_REALM, KEYCLOAK_URL, ROUTER_LISTEN, ROUTER_PORT};
 use crate::state::{AppState, RouterStatus};
 
 // ── Screen state (GUI thread only) ─────────────────────────────────────────────
@@ -197,6 +197,11 @@ fn try_login(form: &mut LoginForm, state: &Arc<Mutex<AppState>>) {
         .join("dverse")
         .join("certs");
 
+    // The Step-CA x509 template sets SAN = DNS:zenoh-<preferred_username>.local,
+    // so the endpoint must use that hostname for TLS to verify correctly.
+    let cn = form.username.split('@').next().unwrap_or(&form.username);
+    let router_endpoint = format!("tls/zenoh-{cn}.local:{ROUTER_PORT}");
+
     let cfg = DverseConfig {
         username: form.username.clone(),
         password: form.password.clone(),
@@ -208,7 +213,7 @@ fn try_login(form: &mut LoginForm, state: &Arc<Mutex<AppState>>) {
         ca_root_pem_path: DverseConfig::ca_root_pem_path_default(),
         cert_dir,
         router_listen: ROUTER_LISTEN.into(),
-        router_endpoint: ROUTER_ENDPOINT.into(),
+        router_endpoint,
     };
 
     if let Err(e) = cfg.save() {
