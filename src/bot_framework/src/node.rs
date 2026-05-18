@@ -65,6 +65,7 @@ impl NodeConfig {
     async fn build_zenoh_config(&self) -> Result<zenoh::Config> {
         let mut config = zenoh::Config::default();
 
+        zinsert(&mut config, "mode", "\"client\"")?;
         zinsert(&mut config, "connect/endpoints", &format!("[\"{}\"]", self.router))?;
         zinsert(&mut config, "scouting/multicast/enabled", "false")?;
 
