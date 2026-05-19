@@ -4,7 +4,7 @@ use std::time::Duration;
 use eframe::egui;
 use bot_framework::config::DverseConfig;
 
-use crate::constants::{CA_URL, CLIENT_ID, CLIENT_SECRET, KEYCLOAK_ADMIN_PASSWORD, KEYCLOAK_REALM, KEYCLOAK_URL, ROUTER_LISTEN, ROUTER_PORT};
+use crate::constants::{CA_URL, CLIENT_ID, CLIENT_SECRET, KEYCLOAK_REALM, KEYCLOAK_URL, REGISTRATION_CLIENT_ID, REGISTRATION_CLIENT_SECRET, ROUTER_LISTEN, ROUTER_PORT};
 use crate::state::{AppState, RouterStatus};
 
 // ── Screen state (GUI thread only) ─────────────────────────────────────────────
@@ -355,15 +355,15 @@ fn register_user(username: &str, password: &str) -> Result<(), String> {
 async fn register_user_async(username: &str, password: &str) -> Result<(), String> {
     let client = reqwest::Client::new();
 
-    // 1. Obtain an admin access token.
+    // 1. Obtain a service-account token using client credentials.
+    //    The dverse-registration client has manage-users scoped to create-only.
     let token_url = format!("{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token");
     let token_resp = client
         .post(&token_url)
         .form(&[
-            ("client_id", "admin-cli"),
-            ("grant_type", "password"),
-            ("username", "admin"),
-            ("password", KEYCLOAK_ADMIN_PASSWORD),
+            ("client_id", REGISTRATION_CLIENT_ID),
+            ("client_secret", REGISTRATION_CLIENT_SECRET),
+            ("grant_type", "client_credentials"),
         ])
         .send()
         .await
