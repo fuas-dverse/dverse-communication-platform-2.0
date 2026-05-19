@@ -31,10 +31,14 @@
 
 \begin{center}
 \begin{tabular}{rl}
-\textbf{Status:} & Accepted \\
+\textbf{Status:} & \textcolor{red}{Superseded by ADR-011} \\
 \textbf{Project:} & DVerse Communication Platform 2.0 \\
 \end{tabular}
 \end{center}
+
+\section*{Supersession Notice}
+
+\textcolor{red}{\textbf{This ADR has been superseded by ADR-011} (Pure Rust mDNS-SD via \texttt{mdns-sd}, 19-05-2026). The Avahi subprocess approach described here was replaced because it is Linux-only, publishes only an A record pointing at \texttt{127.0.0.1}, and does not emit DNS-SD service records. See ADR-011 for the current decision.}
 
 \section{Context}
 
