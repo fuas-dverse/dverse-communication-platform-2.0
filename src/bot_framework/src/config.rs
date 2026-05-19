@@ -10,6 +10,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DverseConfig {
     pub username: String,
+    #[serde(skip)]
     pub password: String,
     pub keycloak_url: String,
     pub keycloak_realm: String,
@@ -46,10 +47,20 @@ impl DverseConfig {
         let path = Self::config_path();
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
-        toml::from_str(&text).context("parsing config TOML")
+        let mut cfg: Self = toml::from_str(&text).context("parsing config TOML")?;
+        let entry = keyring::Entry::new("dverse", &cfg.username)
+            .context("opening keychain entry")?;
+        cfg.password = entry
+            .get_password()
+            .context("reading password from keychain — sign in again to re-enter it")?;
+        Ok(cfg)
     }
 
     pub fn save(&self) -> Result<()> {
+        let entry = keyring::Entry::new("dverse", &self.username)
+            .context("opening keychain entry")?;
+        entry.set_password(&self.password)
+            .context("storing password in keychain")?;
         let path = Self::config_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).context("creating config dir")?;
