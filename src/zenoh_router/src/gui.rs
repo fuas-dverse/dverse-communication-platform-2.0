@@ -357,7 +357,7 @@ async fn register_user_async(username: &str, password: &str) -> Result<(), Strin
 
     // 1. Obtain a service-account token using client credentials.
     //    The dverse-registration client has manage-users scoped to create-only.
-    let token_url = format!("{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token");
+    let token_url = format!("{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/token");
     let token_resp = client
         .post(&token_url)
         .form(&[
@@ -390,8 +390,11 @@ async fn register_user_async(username: &str, password: &str) -> Result<(), Strin
     let user_payload = serde_json::json!({
         "username": username,
         "email": email,
+        "firstName": username,
+        "lastName": "",
         "emailVerified": true,
         "enabled": true,
+        "requiredActions": [],
         "credentials": [{
             "type": "password",
             "value": password,
