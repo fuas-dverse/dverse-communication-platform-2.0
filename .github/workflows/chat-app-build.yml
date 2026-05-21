@@ -6,10 +6,15 @@ concurrency:
 
 on:
   push:
+    branches:
+      - develop
+      - "feature/**"
     paths:
       - "experiments/chat-app/**"
       - ".github/workflows/chat-app-build.yml"
   pull_request:
+    branches:
+      - main
     paths:
       - "experiments/chat-app/**"
       - ".github/workflows/chat-app-build.yml"
@@ -70,6 +75,7 @@ jobs:
 
   backend-build:
     needs: backend-test
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
 
     defaults:
@@ -123,6 +129,7 @@ jobs:
 
   frontend-build:
     needs: frontend-test
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
 
     defaults:
@@ -149,6 +156,7 @@ jobs:
       - backend-build
       - frontend-test
       - frontend-build
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     env:
       CODACY_KEY: ${{ secrets.CODACY_KEY }}
