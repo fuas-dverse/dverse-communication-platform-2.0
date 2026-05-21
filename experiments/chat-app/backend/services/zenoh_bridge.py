@@ -15,15 +15,48 @@ Request flow:
 import asyncio
 import json
 import os
+import time
 import uuid
 from typing import Optional
+
+PRESENCE_TTL = 90  # seconds — bot considered offline if no heartbeat within this window
+
+
+class BotPresence:
+    def __init__(self, name: str, description: str, platform: str, capabilities: list[str], token_hash: str):
+        self.name = name
+        self.description = description
+        self.platform = platform
+        self.capabilities = capabilities
+        self.token_hash = token_hash
+        self.last_seen: float = time.time()
+
+    def is_online(self) -> bool:
+        return (time.time() - self.last_seen) < PRESENCE_TTL
+
+    def verify_token(self, token: str) -> bool:
+        import hashlib
+        return hashlib.sha256(token.encode()).hexdigest() == self.token_hash
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "platform": self.platform,
+            "capabilities": self.capabilities,
+            "last_seen": self.last_seen,
+            "online": self.is_online(),
+            # token_hash is intentionally omitted — never sent to clients
+        }
 
 
 class ZenohBridge:
     def __init__(self):
         self._session = None
         self._sub = None
+        self._presence_sub = None
         self._pending: dict[str, asyncio.Future] = {}
+        self._presence: dict[str, BotPresence] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self.available = False
 
@@ -32,30 +65,67 @@ class ZenohBridge:
         router = os.environ.get("ZENOH_ROUTER", "tcp/localhost:7447")
         try:
             import zenoh  # optional dependency
-            conf = zenoh.Config()
-            conf.insert_json5("connect/endpoints", json.dumps([router]))
+            conf = zenoh.Config.from_json5(json.dumps({
+                "connect": {"endpoints": [router]}
+            }))
             self._session = zenoh.open(conf)
             self._sub = self._session.declare_subscriber(
                 "chat/response/**",
                 self._on_response,
             )
+            self._presence_sub = self._session.declare_subscriber(
+                "chat/presence/**",
+                self._on_presence,
+            )
             self.available = True
-            print(f"[Zenoh] Connected to router at {router}")
+            print(f"[Zenoh] Connected to router at {router} (ZID: {self._session.zid()})")
         except Exception as exc:
             print(f"[Zenoh] Not available ({exc}). Zenoh bots will be disabled.")
+
+    def _on_presence(self, sample):
+        """Called from Zenoh's internal thread when a bot publishes its heartbeat."""
+        try:
+            data = json.loads(bytes(sample.payload.to_bytes()).decode("utf-8"))
+            name = data.get("name", "")
+            if not name:
+                return
+            if name in self._presence:
+                self._presence[name].last_seen = time.time()
+                self._presence[name].token_hash = data.get("token_hash", "")
+            else:
+                self._presence[name] = BotPresence(
+                    name=name,
+                    description=data.get("description", ""),
+                    platform=data.get("platform", "zenoh"),
+                    capabilities=data.get("capabilities", []),
+                    token_hash=data.get("token_hash", ""),
+                )
+        except Exception as exc:
+            print(f"[Zenoh] _on_presence error: {exc}")
+
+    def get_available_bots(self) -> list[dict]:
+        """Return bots that have sent a heartbeat recently."""
+        return [b.to_dict() for b in self._presence.values() if b.is_online()]
+
+    def verify_bot_token(self, bot_name: str, token: str) -> bool:
+        """Return True if token matches the hash the bot published."""
+        presence = self._presence.get(bot_name)
+        if not presence or not presence.is_online():
+            return False
+        return presence.verify_token(token)
 
     def _on_response(self, sample):
         """Called from Zenoh's internal thread — must not touch asyncio directly."""
         try:
-            data = json.loads(bytes(sample.payload).decode("utf-8"))
+            data = json.loads(bytes(sample.payload.to_bytes()).decode("utf-8"))
             request_id = data.get("request_id")
             content = data.get("content", "")
             if request_id and request_id in self._pending:
                 future = self._pending.pop(request_id)
                 if not future.done():
                     self._loop.call_soon_threadsafe(future.set_result, content)
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[Zenoh] _on_response error: {exc}")
 
     async def request(
         self,
@@ -83,7 +153,7 @@ class ZenohBridge:
 
         await loop.run_in_executor(
             None,
-            lambda: self._session.put(f"chat/{room_id}/request/{bot_name}", payload),
+            lambda: self._session.put(f"chat/{room_id}/request/{bot_name}", payload.encode()),
         )
 
         try:
@@ -101,6 +171,7 @@ class ZenohBridge:
                 self._session.close()
             except Exception:
                 pass
+        self._presence.clear()
 
 
 zenoh_bridge = ZenohBridge()

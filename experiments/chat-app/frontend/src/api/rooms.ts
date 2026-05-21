@@ -1,5 +1,5 @@
 import { apiFetch } from "./client"
-import type { Room, BotConfig, BotConfigCreate, BotConfigUpdate } from "../types"
+import type { Room, BotConfig, BotConfigCreate, BotConfigUpdate, AvailableBot } from "../types"
 
 export async function getRooms(serverId?: string): Promise<Room[]> {
   const url = serverId ? `/rooms?server_id=${encodeURIComponent(serverId)}` : "/rooms"
@@ -49,4 +49,8 @@ export async function deleteBot(
   await apiFetch<Record<string, never>>(`/rooms/${roomId}/bots/${botId}`, {
     method: "DELETE",
   })
+}
+
+export async function getAvailableBots(): Promise<AvailableBot[]> {
+  return apiFetch<AvailableBot[]>("/bots/available")
 }

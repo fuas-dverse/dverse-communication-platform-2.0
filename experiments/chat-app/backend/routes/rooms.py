@@ -25,10 +25,21 @@ def _server_channel(server_id: str) -> str:
 
 def _get_bots_for_room(db, room_id: str) -> list[BotConfig]:
     rows = db.execute(
-        "SELECT * FROM room_bots WHERE room_id = ? ORDER BY created_at ASC",
+        """
+        SELECT rb.*, u.username AS added_by_username
+        FROM room_bots rb
+        LEFT JOIN users u ON rb.added_by = u.id
+        WHERE rb.room_id = ?
+        ORDER BY rb.created_at ASC
+        """,
         (room_id,),
     ).fetchall()
-    return [BotConfig(**dict(row)) for row in rows]
+    bots = []
+    for row in rows:
+        data = dict(row)
+        data["added_by"] = data.pop("added_by_username", None) or data.get("added_by")
+        bots.append(BotConfig(**data))
+    return bots
 
 
 def _row_to_room(db, row) -> Room:
@@ -158,6 +169,13 @@ def add_bot(
     if room["created_by"] != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the room creator can add bots")
 
+    if body.provider == "zenoh":
+        if not body.token:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A token is required to add a Zenoh bot")
+        from ..services.zenoh_bridge import zenoh_bridge
+        if not zenoh_bridge.verify_bot_token(body.name, body.token):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid token — the bot owner must share the correct token with you")
+
     existing_bot = db.execute(
         "SELECT id FROM room_bots WHERE room_id = ? AND name = ?",
         (room_id, body.name),
@@ -172,8 +190,8 @@ def add_bot(
     created_at = datetime.utcnow().isoformat() + "Z"
 
     db.execute(
-        "INSERT INTO room_bots (id, room_id, name, provider, personality, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (bot_id, room_id, body.name, body.provider, body.personality, body.model, created_at),
+        "INSERT INTO room_bots (id, room_id, name, provider, personality, model, system_prompt, added_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (bot_id, room_id, body.name, body.provider, body.personality, body.model, body.system_prompt, current_user.id, created_at),
     )
     db.commit()
 
@@ -184,6 +202,8 @@ def add_bot(
         provider=body.provider,
         personality=body.personality,
         model=body.model,
+        system_prompt=body.system_prompt,
+        added_by=current_user.username,
         created_at=created_at,
     )
 

@@ -132,3 +132,12 @@ def _migrate(conn: sqlite3.Connection):
     if "last_seen" not in member_cols:
         conn.execute("ALTER TABLE server_members ADD COLUMN last_seen TEXT")
         conn.commit()
+
+    # Add added_by and system_prompt to room_bots if not present
+    bot_cols = {row[1] for row in conn.execute("PRAGMA table_info(room_bots)").fetchall()}
+    if "added_by" not in bot_cols:
+        conn.execute("ALTER TABLE room_bots ADD COLUMN added_by TEXT REFERENCES users(id)")
+        conn.commit()
+    if "system_prompt" not in bot_cols:
+        conn.execute("ALTER TABLE room_bots ADD COLUMN system_prompt TEXT")
+        conn.commit()

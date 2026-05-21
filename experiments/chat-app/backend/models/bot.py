@@ -28,17 +28,26 @@ class BotConfigCreate(BaseModel):
     provider: BotProvider
     personality: BotPersonality = BotPersonality.ASSISTANT
     model: str | None = None
+    system_prompt: str | None = None
+    token: str | None = None  # required when provider=zenoh, not stored
 
 
 class BotConfigUpdate(BaseModel):
     provider: BotProvider | None = None
     personality: BotPersonality | None = None
     model: str | None = None
+    system_prompt: str | None = None
 
 
-class BotConfig(BotConfigCreate):
+class BotConfig(BaseModel):
     id: str
     room_id: str
+    name: str
+    provider: BotProvider
+    personality: BotPersonality
+    model: str | None = None
+    system_prompt: str | None = None
+    added_by: str | None = None
     created_at: str
 
     model_config = ConfigDict(from_attributes=True)
