@@ -5,8 +5,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from .db import init_db
 from .routes import auth, rooms, messages, servers
+from .telemetry import setup_telemetry
 
 load_dotenv()
+
+_otel_enabled = setup_telemetry()
 
 app = FastAPI(title="ChatApp API")
 
@@ -17,6 +20,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if _otel_enabled:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    FastAPIInstrumentor().instrument_app(app)
 
 
 @app.on_event("startup")
