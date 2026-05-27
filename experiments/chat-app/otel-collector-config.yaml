@@ -16,7 +16,6 @@ exporters:
       insecure: true
   prometheus:
     endpoint: "0.0.0.0:8889"
-    namespace: chatapp
 
 service:
   pipelines:
