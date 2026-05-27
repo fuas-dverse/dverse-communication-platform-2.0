@@ -1,4 +1,5 @@
 mod constants;
+mod discovery;
 mod gui;
 mod router;
 mod state;

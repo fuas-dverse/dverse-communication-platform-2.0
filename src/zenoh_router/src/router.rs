@@ -6,44 +6,8 @@ use bot_framework::cert;
 use bot_framework::config::DverseConfig;
 use zenoh::Session;
 
+use crate::discovery::MdnsHandle;
 use crate::state::{AppState, RouterStatus};
-
-// ── Avahi mDNS helper ─────────────────────────────────────────────────────────
-
-/// Keeps an `avahi-publish-address` child alive.  Kills it on drop so the
-/// mDNS record is withdrawn when the router shuts down.
-struct AvahiHandle(std::process::Child);
-
-impl Drop for AvahiHandle {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-/// Spawn `avahi-publish-address -R <hostname> 127.0.0.1` in the background.
-/// Returns None (with a log message) if avahi-utils is not installed.
-fn publish_avahi(hostname: &str, state: &Arc<Mutex<AppState>>) -> Option<AvahiHandle> {
-    match std::process::Command::new("avahi-publish-address")
-        .args(["-R", hostname, "127.0.0.1"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
-        Ok(child) => {
-            state.lock().unwrap().push_log(
-                format!("mDNS: {hostname} → 127.0.0.1 (via Avahi)"),
-            );
-            Some(AvahiHandle(child))
-        }
-        Err(e) => {
-            state.lock().unwrap().push_log(
-                format!("Warning: avahi-publish-address unavailable ({e}); add {hostname} to /etc/hosts manually"),
-            );
-            None
-        }
-    }
-}
 
 // ── Router background task ────────────────────────────────────────────────────
 
@@ -52,8 +16,8 @@ fn publish_avahi(hostname: &str, state: &Arc<Mutex<AppState>>) -> Option<AvahiHa
 /// restarting the session whenever the admitted ACL changes.
 pub async fn run(state: Arc<Mutex<AppState>>) {
     let mut current_cfg: Option<DverseConfig> = None;
-    // Kept alive for the entire router lifetime; dropped (→ avahi record removed) on exit.
-    let mut _avahi: Option<AvahiHandle> = None;
+    // Kept alive for the entire router lifetime; dropped (→ mDNS record withdrawn) on exit.
+    let mut _mdns: Option<MdnsHandle> = None;
 
     loop {
         // ── Phase 1: obtain config ───────────────────────────────────────────
@@ -71,10 +35,9 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
                 tokio::time::sleep(Duration::from_millis(200)).await;
             };
 
-            // Register the mDNS hostname once, the first time we get a config.
-            if _avahi.is_none() {
-                let hostname = format!("zenoh-{}.local", cfg.operator_cn());
-                _avahi = publish_avahi(&hostname, &state);
+            // Publish DNS-SD service record once, the first time we get a config.
+            if _mdns.is_none() {
+                _mdns = MdnsHandle::publish(&cfg.operator_cn(), crate::constants::ROUTER_PORT, &state);
             }
 
             cfg
