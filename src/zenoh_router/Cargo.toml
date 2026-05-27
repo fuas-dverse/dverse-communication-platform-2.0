@@ -1,0 +1,24 @@
+[package]
+name = "zenoh-router"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "zenoh-router"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+bot-framework = { path = "../bot_framework" }
+clap = { version = "4", features = ["derive"] }
+dirs = "5"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+serde_json = "1"
+eframe = "0.31"
+egui = "0.31"
+tokio = { version = "1", features = ["full"] }
+zenoh = "1.8.0"
+mdns-sd = "0.13"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "4", default-features = false, features = ["blocking"] }
