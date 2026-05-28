@@ -50,7 +50,8 @@ async fn main() -> Result<()> {
             cn: &cn,
             agent_name: NODE_NAME,
             version: env!("CARGO_PKG_VERSION"),
-            key_exprs: vec!["dverse/ping".into(), "dverse/pong".into()],
+            publishes: vec!["dverse/pong".into()],
+            subscribes: vec!["dverse/ping".into()],
         },
     );
 

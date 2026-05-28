@@ -595,10 +595,19 @@ fn show_main(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>) {
                                     ui.weak("·");
                                     ui.weak(format_ago(now.saturating_duration_since(ag.last_seen)));
                                 });
-                                if !ag.key_expressions.is_empty() {
+                                if !ag.publishes.is_empty() || !ag.subscribes.is_empty() {
                                     ui.indent(format!("ke_{cn}_{name}"), |ui| {
-                                        for ke in &ag.key_expressions {
-                                            ui.monospace(format!("• {ke}"));
+                                        if !ag.publishes.is_empty() {
+                                            ui.weak("Publishes");
+                                            for ke in &ag.publishes {
+                                                ui.monospace(format!("  → {ke}"));
+                                            }
+                                        }
+                                        if !ag.subscribes.is_empty() {
+                                            ui.weak("Subscribes");
+                                            for ke in &ag.subscribes {
+                                                ui.monospace(format!("  ← {ke}"));
+                                            }
                                         }
                                     });
                                 }
