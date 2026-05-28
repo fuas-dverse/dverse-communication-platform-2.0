@@ -256,6 +256,12 @@ fn build_zenoh_config(
     zinsert(&mut cfg, "transport/link/tls/enable_mtls", "true")?;
     zinsert(&mut cfg, "transport/link/tls/listen_certificate", &json_str(&cert_path.to_string_lossy()))?;
     zinsert(&mut cfg, "transport/link/tls/listen_private_key", &json_str(&key_path.to_string_lossy()))?;
+    // The router presents the same cert as a client when it dials a peer
+    // router's listener — peer routers run `enable_mtls=true` and require a
+    // valid client cert, so without these two keys the outgoing handshake
+    // stalls and inter-router forwarding never lights up.
+    zinsert(&mut cfg, "transport/link/tls/connect_certificate", &json_str(&cert_path.to_string_lossy()))?;
+    zinsert(&mut cfg, "transport/link/tls/connect_private_key", &json_str(&key_path.to_string_lossy()))?;
     zinsert(&mut cfg, "access_control", &build_acl_json(admitted))?;
 
     if !peers.is_empty() {
