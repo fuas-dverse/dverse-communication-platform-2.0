@@ -31,8 +31,8 @@
       },
       "targets": [
         {
-          "expr": "sum by (http_route, http_request_method) (rate(chatapp_http_server_duration_milliseconds_count[1m]))",
-          "legendFormat": "{{http_request_method}} {{http_route}}",
+          "expr": "sum by (http_target, http_method) (rate(http_server_duration_milliseconds_count[1m]))",
+          "legendFormat": "{{http_method}} {{http_target}}",
           "refId": "A"
         }
       ],
@@ -57,13 +57,13 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, http_route) (rate(chatapp_http_server_duration_milliseconds_bucket[5m])))",
-          "legendFormat": "p95 {{http_route}}",
+          "expr": "histogram_quantile(0.95, sum by (le, http_target) (rate(http_server_duration_milliseconds_bucket[5m])))",
+          "legendFormat": "p95 {{http_target}}",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.50, sum by (le, http_route) (rate(chatapp_http_server_duration_milliseconds_bucket[5m])))",
-          "legendFormat": "p50 {{http_route}}",
+          "expr": "histogram_quantile(0.50, sum by (le, http_target) (rate(http_server_duration_milliseconds_bucket[5m])))",
+          "legendFormat": "p50 {{http_target}}",
           "refId": "B"
         }
       ],
@@ -95,7 +95,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (llm_provider, status) (rate(chatapp_chatapp_llm_requests_total[1m]))",
+          "expr": "sum by (llm_provider, status) (rate(chatapp_llm_requests_total[1m]))",
           "legendFormat": "{{llm_provider}} / {{status}}",
           "refId": "A"
         }
@@ -121,12 +121,12 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, llm_provider) (rate(chatapp_chatapp_llm_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, llm_provider) (rate(chatapp_llm_duration_seconds_bucket[5m])))",
           "legendFormat": "p95 {{llm_provider}}",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.50, sum by (le, llm_provider) (rate(chatapp_chatapp_llm_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le, llm_provider) (rate(chatapp_llm_duration_seconds_bucket[5m])))",
           "legendFormat": "p50 {{llm_provider}}",
           "refId": "B"
         }
@@ -157,7 +157,7 @@
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background" },
       "targets": [
         {
-          "expr": "sum(rate(chatapp_chatapp_llm_requests_total{status=\"error\"}[5m])) / sum(rate(chatapp_chatapp_llm_requests_total[5m]))",
+          "expr": "sum(rate(chatapp_llm_requests_total{status=\"error\"}[5m])) / sum(rate(chatapp_llm_requests_total[5m]))",
           "legendFormat": "Error rate",
           "refId": "A"
         }
@@ -190,7 +190,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (zenoh_bot_name) (rate(chatapp_chatapp_zenoh_duration_seconds_count[1m]))",
+          "expr": "sum by (zenoh_bot_name) (rate(chatapp_zenoh_duration_seconds_count[1m]))",
           "legendFormat": "{{zenoh_bot_name}}",
           "refId": "A"
         }
@@ -216,12 +216,12 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, zenoh_bot_name) (rate(chatapp_chatapp_zenoh_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, zenoh_bot_name) (rate(chatapp_zenoh_duration_seconds_bucket[5m])))",
           "legendFormat": "p95 {{zenoh_bot_name}}",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.50, sum by (le, zenoh_bot_name) (rate(chatapp_chatapp_zenoh_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le, zenoh_bot_name) (rate(chatapp_zenoh_duration_seconds_bucket[5m])))",
           "legendFormat": "p50 {{zenoh_bot_name}}",
           "refId": "B"
         }
@@ -253,5 +253,5 @@
   "timezone": "browser",
   "title": "ChatApp",
   "uid": "chatapp-main",
-  "version": 1
+  "version": 2
 }
