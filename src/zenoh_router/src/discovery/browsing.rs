@@ -10,6 +10,7 @@ use crate::state::AppState;
 
 use super::common::{
     is_unroutable, zenoh_tls_endpoint, PeerRegistry, SERVICE_TYPE, TXT_KEY_CN, TXT_KEY_IP,
+    TXT_KEY_SESSION,
 };
 
 /// Start browsing for peers on the given mdns-sd daemon and return a watch
@@ -18,6 +19,7 @@ use super::common::{
 pub(super) fn mdns_sd_start(
     daemon: &ServiceDaemon,
     my_cn: &str,
+    my_session: &str,
     state: &Arc<Mutex<AppState>>,
 ) -> Option<watch::Receiver<Vec<String>>> {
     let browse_rx = match daemon.browse(SERVICE_TYPE) {
@@ -33,12 +35,13 @@ pub(super) fn mdns_sd_start(
 
     let (registry, peer_rx) = PeerRegistry::new();
     let my_cn = my_cn.to_string();
+    let my_session = my_session.to_string();
     let state = Arc::clone(state);
 
     std::thread::spawn(move || {
         let mut registry = registry;
         while let Ok(event) = browse_rx.recv() {
-            handle_event(event, &my_cn, &state, &mut registry);
+            handle_event(event, &my_cn, &my_session, &state, &mut registry);
         }
         state.lock().unwrap().push_log("mDNS[mdns-sd]: browse loop exited".to_string());
     });
@@ -49,6 +52,7 @@ pub(super) fn mdns_sd_start(
 fn handle_event(
     event: ServiceEvent,
     my_cn: &str,
+    my_session: &str,
     state: &Arc<Mutex<AppState>>,
     registry: &mut PeerRegistry,
 ) {
@@ -59,7 +63,7 @@ fn handle_event(
             ));
         }
         ServiceEvent::ServiceResolved(info) => {
-            handle_resolved(info, my_cn, state, registry)
+            handle_resolved(info, my_cn, my_session, state, registry)
         }
         ServiceEvent::ServiceRemoved(_, fullname) => {
             state
@@ -84,13 +88,15 @@ fn handle_event(
 fn handle_resolved(
     info: ServiceInfo,
     my_cn: &str,
+    my_session: &str,
     state: &Arc<Mutex<AppState>>,
     registry: &mut PeerRegistry,
 ) {
     let remote_cn = info.get_property_val_str(TXT_KEY_CN).unwrap_or_default();
+    let remote_session = info.get_property_val_str(TXT_KEY_SESSION).unwrap_or_default();
     let addrs: Vec<_> = info.get_addresses().iter().copied().collect();
     state.lock().unwrap().push_log(format!(
-        "mDNS[mdns-sd]: resolved {:?} cn={remote_cn:?} addrs={addrs:?} port={}",
+        "mDNS[mdns-sd]: resolved {:?} cn={remote_cn:?} session={remote_session:?} addrs={addrs:?} port={}",
         info.get_fullname(),
         info.get_port(),
     ));
@@ -98,6 +104,15 @@ fn handle_resolved(
     if remote_cn.is_empty() || remote_cn == my_cn {
         state.lock().unwrap().push_log(format!(
             "mDNS[mdns-sd]: skipping self or empty CN ({remote_cn:?})"
+        ));
+        return;
+    }
+
+    // Session filter: skip peers that belong to a different session.  Without
+    // this, two unrelated users on the same LAN would auto-mesh their routers.
+    if remote_session != my_session {
+        state.lock().unwrap().push_log(format!(
+            "mDNS[mdns-sd]: skipping peer {remote_cn} (session={remote_session:?}, ours={my_session:?})"
         ));
         return;
     }

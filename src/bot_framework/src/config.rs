@@ -2,6 +2,25 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Whether this dverse install hosts its own session (Admin) or joins
+/// another user's session (Client of some admin CN).
+///
+/// Persisted in `DverseConfig`. Old config files without this field load as
+/// `Admin` via the `Default` impl + `#[serde(default)]` — so single-machine
+/// setups keep working unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "admin_cn", rename_all = "snake_case")]
+pub enum SessionRole {
+    Admin,
+    Client { admin_cn: String },
+}
+
+impl Default for SessionRole {
+    fn default() -> Self {
+        Self::Admin
+    }
+}
+
 /// Machine-wide dverse configuration, stored at `~/.config/dverse/config.toml`.
 /// Only one user session is supported per machine.
 ///
@@ -24,6 +43,10 @@ pub struct DverseConfig {
     pub router_listen: String,
     /// Zenoh connect endpoint used by local agents (client side).
     pub router_endpoint: String,
+    /// Whether this user creates a new session or joins someone else's.
+    /// Missing from old configs → `Admin` by default.
+    #[serde(default)]
+    pub session_role: SessionRole,
 }
 
 impl DverseConfig {
@@ -83,6 +106,17 @@ impl DverseConfig {
             .next()
             .unwrap_or(&self.username)
             .to_string()
+    }
+
+    /// Identifier shared by every router participating in the same session.
+    /// Equals our own CN when we host (Admin), the admin's CN when we joined
+    /// (Client). Used as the `session=` TXT entry in DNS-SD and to filter
+    /// peers — two routers with different session_ids never auto-mesh.
+    pub fn session_id(&self) -> String {
+        match &self.session_role {
+            SessionRole::Admin => self.operator_cn(),
+            SessionRole::Client { admin_cn } => admin_cn.clone(),
+        }
     }
 
     /// Build a `CertConfig` for the given node name using the stored credentials.

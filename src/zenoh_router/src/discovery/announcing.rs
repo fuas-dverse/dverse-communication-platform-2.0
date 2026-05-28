@@ -13,6 +13,7 @@ use crate::state::AppState;
 
 use super::common::{
     detect_lan_ipv4, instance_name, srv_host_name, SERVICE_TYPE, TXT_KEY_CN, TXT_KEY_IP,
+    TXT_KEY_SESSION,
 };
 
 /// Register our service on the given mdns-sd daemon.  Returns the fullname
@@ -20,6 +21,7 @@ use super::common::{
 pub(super) fn mdns_sd_register(
     daemon: &ServiceDaemon,
     cn: &str,
+    session_id: &str,
     port: u16,
     state: &Arc<Mutex<AppState>>,
 ) -> Option<String> {
@@ -34,13 +36,18 @@ pub(super) fn mdns_sd_register(
             .unwrap_or_else(|| "unknown".to_string())
     ));
 
-    // TXT props: always `cn`, optionally `ip` for cross-stack address recovery.
+    // TXT props: always `cn` + `session`, optionally `ip` for cross-stack
+    // address recovery.
     let ip_str;
     let props: &[(&str, &str)] = if let Some(ip) = lan_ip {
         ip_str = ip.to_string();
-        &[(TXT_KEY_CN, cn), (TXT_KEY_IP, &ip_str)]
+        &[
+            (TXT_KEY_CN, cn),
+            (TXT_KEY_SESSION, session_id),
+            (TXT_KEY_IP, &ip_str),
+        ]
     } else {
-        &[(TXT_KEY_CN, cn)]
+        &[(TXT_KEY_CN, cn), (TXT_KEY_SESSION, session_id)]
     };
 
     // Pin the A record to the LAN IPv4 explicitly; without this mdns-sd

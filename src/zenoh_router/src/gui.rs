@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use eframe::egui;
-use bot_framework::config::DverseConfig;
+use bot_framework::config::{DverseConfig, SessionRole};
 
 use crate::constants::{CA_URL, CLIENT_ID, CLIENT_SECRET, KEYCLOAK_REALM, KEYCLOAK_URL, REGISTRATION_CLIENT_ID, REGISTRATION_CLIENT_SECRET, ROUTER_LISTEN, ROUTER_PORT};
 use crate::state::{AppState, RouterStatus};
@@ -20,11 +20,22 @@ pub struct LoginForm {
     pub username: String,
     pub password: String,
     pub error: Option<String>,
+    /// Radio: true = create a new session (this user becomes admin),
+    /// false = join an existing session whose admin's CN is `join_admin_cn`.
+    pub create_session: bool,
+    /// Admin CN to join when `create_session == false`.
+    pub join_admin_cn: String,
 }
 
 impl Default for LoginForm {
     fn default() -> Self {
-        Self { username: String::new(), password: String::new(), error: None }
+        Self {
+            username: String::new(),
+            password: String::new(),
+            error: None,
+            create_session: true,
+            join_admin_cn: String::new(),
+        }
     }
 }
 
@@ -147,6 +158,29 @@ fn show_login(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>, form: &mut 
                     }
                 });
 
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            // Session role selector: create your own session, or join an
+            // existing one whose admin's CN you know.
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut form.create_session, true, "Create new session");
+                ui.add_space(12.0);
+                ui.radio_value(&mut form.create_session, false, "Join session");
+            });
+            if !form.create_session {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Admin username");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut form.join_admin_cn)
+                            .hint_text("e.g. alice")
+                            .min_size(egui::vec2(220.0, 0.0)),
+                    );
+                });
+            }
+
             ui.add_space(16.0);
 
             if let Some(err) = &form.error {
@@ -192,6 +226,19 @@ fn try_login(form: &mut LoginForm, state: &Arc<Mutex<AppState>>) {
         return;
     }
 
+    // Build session role from the radio + admin CN field.  When joining,
+    // the admin CN is required and must be non-empty.
+    let session_role = if form.create_session {
+        SessionRole::Admin
+    } else {
+        let admin_cn = form.join_admin_cn.trim().to_string();
+        if admin_cn.is_empty() {
+            form.error = Some("Admin username is required to join a session.".into());
+            return;
+        }
+        SessionRole::Client { admin_cn }
+    };
+
     let cert_dir = dirs::data_local_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("dverse")
@@ -214,6 +261,7 @@ fn try_login(form: &mut LoginForm, state: &Arc<Mutex<AppState>>) {
         cert_dir,
         router_listen: ROUTER_LISTEN.into(),
         router_endpoint,
+        session_role,
     };
 
     if let Err(e) = cfg.save() {
@@ -444,6 +492,28 @@ fn show_loading(ctx: &egui::Context, state: &Arc<Mutex<AppState>>) {
 
 fn show_main(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>) {
     let st = state.lock().unwrap();
+
+    // Session badge — declared first so it renders above status_bar.  egui's
+    // top panels stack in declaration order.
+    egui::TopBottomPanel::top("session_bar").show(ctx, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Session:");
+            match &st.session_role {
+                SessionRole::Admin => {
+                    ui.colored_label(
+                        egui::Color32::LIGHT_BLUE,
+                        format!("Admin · {}", st.session_id),
+                    );
+                }
+                SessionRole::Client { admin_cn } => {
+                    ui.colored_label(
+                        egui::Color32::LIGHT_GREEN,
+                        format!("Joined · admin: {admin_cn}"),
+                    );
+                }
+            }
+        });
+    });
 
     egui::TopBottomPanel::top("status_bar").show(ctx, |ui| {
         ui.horizontal(|ui| {

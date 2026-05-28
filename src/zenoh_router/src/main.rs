@@ -47,7 +47,9 @@ fn run_demo() {
     let mut state = AppState::new(None);
     state.admitted = vec!["alice".into(), "mybot".into()];
     state.router_status = state::RouterStatus::Running;
+    state.session_id = "alice".into();
     state.push_log("[demo] Router started on tcp/0.0.0.0:7447");
+    state.push_log("[demo] Session admin: alice");
     state.push_log("[demo] Auto-admitted: alice");
     state.push_log("[demo] Auto-admitted: mybot");
     launch_gui(Arc::new(Mutex::new(state)), Screen::Main);
