@@ -24,3 +24,5 @@ tokio = { version = "1", features = ["full"] }
 zenoh = "1.8.0"
 keyring = { version = "3", features = ["sync-secret-service", "apple-native", "windows-native"] }
 x509-parser = "0.18"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

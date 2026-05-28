@@ -7,6 +7,7 @@ use bot_framework::announce::AgentAnnounce;
 use bot_framework::cert;
 use bot_framework::config::{DverseConfig, SessionRole};
 use tokio::sync::watch;
+use tracing::{error, info, warn};
 use zenoh::Session;
 
 use crate::constants::AGENT_HEARTBEAT_INTERVAL;
@@ -34,7 +35,7 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
         let cfg = if let Some(c) = current_cfg.take() {
             c
         } else {
-            state.lock().unwrap().push_log("Waiting for configuration…");
+            info!("waiting for configuration");
             let cfg = loop {
                 {
                     let mut s = state.lock().unwrap();
@@ -61,7 +62,6 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
                     &cfg.operator_cn(),
                     &session_id,
                     crate::constants::ROUTER_PORT,
-                    &state,
                 ) {
                     peer_rx = handle.peer_rx.clone();
                     _mdns = Some(handle);
@@ -72,53 +72,56 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
         };
 
         // Pre-admit operator's CN so all local agents can communicate immediately.
+        // When joining someone else's session, pre-admit the admin's CN too,
+        // so the admin's router (which carries that cert) can connect and
+        // form the mesh before we've heard a heartbeat from any of their agents.
         let operator_cn = cfg.operator_cn();
-        {
+        let (newly_admitted_operator, newly_admitted_admin) = {
             let mut st = state.lock().unwrap();
-            if !st.admitted.contains(&operator_cn) {
+            let added_op = if !st.admitted.contains(&operator_cn) {
                 st.admitted.push(operator_cn.clone());
-                st.push_log(format!("Pre-admitted operator CN: {operator_cn}"));
-            }
-            // When joining someone else's session, pre-admit the admin's CN too,
-            // so the admin's router (which carries that cert) can connect and
-            // form the mesh before we've heard a heartbeat from any of their
-            // agents.
-            if let SessionRole::Client { admin_cn } = &cfg.session_role {
+                true
+            } else {
+                false
+            };
+            let added_admin = if let SessionRole::Client { admin_cn } = &cfg.session_role {
                 if !admin_cn.is_empty() && !st.admitted.contains(admin_cn) {
                     st.admitted.push(admin_cn.clone());
-                    st.push_log(format!("Pre-admitted session admin CN: {admin_cn}"));
+                    Some(admin_cn.clone())
+                } else {
+                    None
                 }
-            }
+            } else {
+                None
+            };
+            (added_op, added_admin)
+        };
+        if newly_admitted_operator {
+            info!(cn = %operator_cn, "pre-admitted operator CN");
+        }
+        if let Some(admin_cn) = newly_admitted_admin {
+            info!(cn = %admin_cn, "pre-admitted session admin CN");
         }
 
         // ── Phase 2: bootstrap CA root, then acquire/reuse cert ─────────────
-        {
-            let mut s = state.lock().unwrap();
-            s.router_status = RouterStatus::Acquiring;
-            s.push_log("Bootstrapping CA root certificate…");
-        }
+        state.lock().unwrap().router_status = RouterStatus::Acquiring;
+        info!("bootstrapping CA root certificate");
 
         let ca_root_path = std::path::PathBuf::from(&cfg.ca_root_pem_path);
         if let Err(e) = cert::bootstrap_ca_root(&cfg.ca_url, &ca_root_path).await {
-            let mut s = state.lock().unwrap();
-            s.router_status = RouterStatus::Error(e.to_string());
-            s.push_log(format!("CA bootstrap error: {e}"));
+            state.lock().unwrap().router_status = RouterStatus::Error(e.to_string());
+            warn!(error = %e, ca_url = %cfg.ca_url, "CA root bootstrap failed");
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
         }
 
-        {
-            state.lock().unwrap().push_log("Checking router certificate…");
-        }
+        info!("checking router certificate");
 
-        let cert_result = acquire_or_reuse(&cfg).await;
-
-        let (cert_p, key_p, ca_p) = match cert_result {
+        let (cert_p, key_p, ca_p) = match acquire_or_reuse(&cfg).await {
             Ok(paths) => paths,
             Err(e) => {
-                let mut s = state.lock().unwrap();
-                s.router_status = RouterStatus::Error(e.to_string());
-                s.push_log(format!("Certificate error: {e}"));
+                state.lock().unwrap().router_status = RouterStatus::Error(e.to_string());
+                error!(error = %e, "router certificate acquire/renew failed");
                 // Don't retry automatically — wait for the user to fix config.
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 continue;
@@ -128,41 +131,45 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
         // ── Phase 3: run session loop (restarts on ACL or peer change) ──────
         let admitted = state.lock().unwrap().admitted.clone();
         let peers = peer_rx.borrow().clone();
+        info!(
+            listen = %cfg.router_listen,
+            peer_count = peers.len(),
+            admitted_count = admitted.len(),
+            cert = %cert_p.display(),
+            key = %key_p.display(),
+            ca = %ca_p.display(),
+            "building Zenoh config",
+        );
+        if !peers.is_empty() {
+            info!(?peers, "connecting to peer routers");
+        }
         let config = match build_zenoh_config(&cfg.router_listen, &ca_p, &cert_p, &key_p, &admitted, &peers) {
             Ok(c) => c,
             Err(e) => {
-                let mut s = state.lock().unwrap();
-                s.router_status = RouterStatus::Error(e.to_string());
-                s.push_log(format!("Config error: {e}"));
+                state.lock().unwrap().router_status = RouterStatus::Error(e.to_string());
+                error!(error = %e, "build_zenoh_config failed");
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 current_cfg = Some(cfg);
                 continue;
             }
         };
 
-        {
-            let mut s = state.lock().unwrap();
-            s.router_status = RouterStatus::Starting;
-            s.push_log(format!("Opening Zenoh router on {}…", cfg.router_listen));
-        }
+        state.lock().unwrap().router_status = RouterStatus::Starting;
+        info!(listen = %cfg.router_listen, "opening Zenoh router");
 
         let session = match zenoh::open(config).await {
             Ok(s) => s,
             Err(e) => {
-                let mut s = state.lock().unwrap();
-                s.router_status = RouterStatus::Error(e.to_string());
-                s.push_log(format!("Zenoh open error: {e}"));
+                state.lock().unwrap().router_status = RouterStatus::Error(e.to_string());
+                error!(error = %e, "zenoh::open failed");
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 current_cfg = Some(cfg);
                 continue;
             }
         };
 
-        {
-            let mut s = state.lock().unwrap();
-            s.router_status = RouterStatus::Running;
-            s.push_log("Router running.");
-        }
+        state.lock().unwrap().router_status = RouterStatus::Running;
+        info!(zid = %session.zid(), "router session running");
 
         // Wall-clock stale-eviction task — spawned once.  Drives the
         // Online→Degraded→Offline ladder and removes agents whose heartbeats
@@ -180,11 +187,8 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
                         let mut st = state_for_reap.lock().unwrap();
                         st.reap_stale(now)
                     };
-                    if !evicted.is_empty() {
-                        let mut st = state_for_reap.lock().unwrap();
-                        for (cn, name) in evicted {
-                            st.push_log(format!("Agent stale-evicted: {cn}/{name}"));
-                        }
+                    for (cn, name) in evicted {
+                        info!(cn = %cn, agent = %name, "agent stale-evicted");
                     }
                 }
             });
@@ -193,16 +197,13 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
 
         // session_loop returns when the admitted list or peer set changes.
         if let Err(e) = session_loop(&session, Arc::clone(&state), peer_rx.clone()).await {
-            state.lock().unwrap().push_log(format!("Session error: {e}"));
+            warn!(error = %e, "session loop errored");
         }
 
         let _ = session.close().await;
 
-        {
-            let mut s = state.lock().unwrap();
-            s.router_status = RouterStatus::Reloading;
-            s.push_log("Reloading router with updated ACL…");
-        }
+        state.lock().unwrap().router_status = RouterStatus::Reloading;
+        info!("reloading router with updated ACL");
 
         current_cfg = Some(cfg);
     }
@@ -266,9 +267,7 @@ async fn session_loop(
                                     .unwrap_or("?")
                                     .to_string();
                                 if seen_legacy.insert(cn_for_log.clone()) {
-                                    state.lock().unwrap().push_log(format!(
-                                        "ignored unparseable announce from CN={cn_for_log}"
-                                    ));
+                                    warn!(cn = %cn_for_log, "ignored unparseable announce");
                                 }
                                 continue;
                             }
@@ -277,16 +276,21 @@ async fn session_loop(
                         let cn = ann.cn.clone();
                         if cn.is_empty() { continue; }
                         let now = Instant::now();
-                        let mut st = state.lock().unwrap();
-
-                        // 1. Agent inventory — never triggers restart.
-                        st.upsert_agent(&ann, now);
-
-                        // 2. Auto-admit — triggers restart so the new CN
-                        // lands in the rebuilt ACL.
-                        if !st.admitted.contains(&cn) {
-                            st.admitted.push(cn.clone());
-                            st.push_log(format!("Auto-admitted CN: {cn}"));
+                        let needs_restart = {
+                            let mut st = state.lock().unwrap();
+                            // 1. Agent inventory — never triggers restart.
+                            st.upsert_agent(&ann, now);
+                            // 2. Auto-admit — triggers restart so the new CN
+                            // lands in the rebuilt ACL.
+                            if !st.admitted.contains(&cn) {
+                                st.admitted.push(cn.clone());
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        if needs_restart {
+                            info!(cn = %cn, "auto-admitted CN");
                             return Ok(());
                         }
                     }
@@ -294,7 +298,7 @@ async fn session_loop(
                 }
             }
             Ok(()) = peer_rx.changed() => {
-                state.lock().unwrap().push_log("Peer set changed, reloading router…");
+                info!("peer set changed, reloading router");
                 return Ok(());
             }
         }

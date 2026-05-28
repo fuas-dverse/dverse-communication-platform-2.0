@@ -81,6 +81,7 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    bot_framework::logging::init();
     let cli = Cli::parse();
 
     match cli.command {

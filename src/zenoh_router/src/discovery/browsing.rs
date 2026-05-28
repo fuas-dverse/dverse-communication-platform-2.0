@@ -1,12 +1,9 @@
 //! Browsing side of DNS-SD discovery — watches for other `_dverse._tcp`
 //! services on the LAN and exposes their endpoints as a watch channel.
 
-use std::sync::{Arc, Mutex};
-
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use tokio::sync::watch;
-
-use crate::state::AppState;
+use tracing::{info, warn};
 
 use super::common::{
     is_unroutable, zenoh_tls_endpoint, PeerRegistry, SERVICE_TYPE, TXT_KEY_CN, TXT_KEY_IP,
@@ -20,30 +17,26 @@ pub(super) fn mdns_sd_start(
     daemon: &ServiceDaemon,
     my_cn: &str,
     my_session: &str,
-    state: &Arc<Mutex<AppState>>,
 ) -> Option<watch::Receiver<Vec<String>>> {
     let browse_rx = match daemon.browse(SERVICE_TYPE) {
         Ok(rx) => rx,
         Err(e) => {
-            state.lock().unwrap().push_log(format!(
-                "mDNS[mdns-sd]: browse failed ({e}); peer discovery disabled"
-            ));
+            warn!(error = %e, "mdns-sd browse failed; peer discovery disabled");
             return None;
         }
     };
-    state.lock().unwrap().push_log("mDNS[mdns-sd]: browse started".to_string());
+    info!("mdns-sd browse started");
 
     let (registry, peer_rx) = PeerRegistry::new();
     let my_cn = my_cn.to_string();
     let my_session = my_session.to_string();
-    let state = Arc::clone(state);
 
     std::thread::spawn(move || {
         let mut registry = registry;
         while let Ok(event) = browse_rx.recv() {
-            handle_event(event, &my_cn, &my_session, &state, &mut registry);
+            handle_event(event, &my_cn, &my_session, &mut registry);
         }
-        state.lock().unwrap().push_log("mDNS[mdns-sd]: browse loop exited".to_string());
+        info!("mdns-sd browse loop exited");
     });
 
     Some(peer_rx)
@@ -53,34 +46,26 @@ fn handle_event(
     event: ServiceEvent,
     my_cn: &str,
     my_session: &str,
-    state: &Arc<Mutex<AppState>>,
     registry: &mut PeerRegistry,
 ) {
     match event {
         ServiceEvent::ServiceFound(svc_type, fullname) => {
-            state.lock().unwrap().push_log(format!(
-                "mDNS[mdns-sd]: found {fullname:?} (type={svc_type:?})"
-            ));
+            info!(svc_type = %svc_type, fullname = %fullname, "mdns-sd service found");
         }
         ServiceEvent::ServiceResolved(info) => {
-            handle_resolved(info, my_cn, my_session, state, registry)
+            handle_resolved(info, my_cn, my_session, registry)
         }
         ServiceEvent::ServiceRemoved(_, fullname) => {
-            state
-                .lock()
-                .unwrap()
-                .push_log(format!("mDNS[mdns-sd]: removed {fullname:?}"));
+            info!(fullname = %fullname, "mdns-sd service removed");
             if let Some(endpoints) = registry.remove(&fullname) {
-                state.lock().unwrap().push_log(format!(
-                    "Peer router left: {}",
-                    endpoints.first().map(String::as_str).unwrap_or(&fullname),
-                ));
+                info!(
+                    target_endpoint = %endpoints.first().map(String::as_str).unwrap_or(&fullname),
+                    "peer router left"
+                );
             }
         }
         other => {
-            state.lock().unwrap().push_log(format!(
-                "mDNS[mdns-sd]: event {other:?}"
-            ));
+            info!(event = ?other, "mdns-sd other event");
         }
     }
 }
@@ -89,22 +74,22 @@ fn handle_resolved(
     info: ServiceInfo,
     my_cn: &str,
     my_session: &str,
-    state: &Arc<Mutex<AppState>>,
     registry: &mut PeerRegistry,
 ) {
     let remote_cn = info.get_property_val_str(TXT_KEY_CN).unwrap_or_default();
     let remote_session = info.get_property_val_str(TXT_KEY_SESSION).unwrap_or_default();
     let addrs: Vec<_> = info.get_addresses().iter().copied().collect();
-    state.lock().unwrap().push_log(format!(
-        "mDNS[mdns-sd]: resolved {:?} cn={remote_cn:?} session={remote_session:?} addrs={addrs:?} port={}",
-        info.get_fullname(),
-        info.get_port(),
-    ));
+    info!(
+        fullname = %info.get_fullname(),
+        cn = %remote_cn,
+        session = %remote_session,
+        ?addrs,
+        port = info.get_port(),
+        "mdns-sd resolved peer"
+    );
 
     if remote_cn.is_empty() || remote_cn == my_cn {
-        state.lock().unwrap().push_log(format!(
-            "mDNS[mdns-sd]: skipping self or empty CN ({remote_cn:?})"
-        ));
+        info!(cn = %remote_cn, "mdns-sd skipping self or empty CN");
         return;
     }
 
@@ -116,44 +101,43 @@ fn handle_resolved(
     // value, and the failure mode (older binary, manual `dns-sd` test) is
     // diagnostically different from "different session running on the LAN".
     if remote_session.is_empty() {
-        state.lock().unwrap().push_log(format!(
-            "mDNS[mdns-sd]: skipping peer {remote_cn} — no session= TXT key (likely older or non-DVerse announcement)"
-        ));
+        info!(
+            cn = %remote_cn,
+            "mdns-sd skipping peer with no session= TXT key (likely older or non-DVerse announcement)"
+        );
         return;
     }
     if remote_session != my_session {
-        state.lock().unwrap().push_log(format!(
-            "mDNS[mdns-sd]: skipping peer {remote_cn} (session={remote_session:?}, ours={my_session:?})"
-        ));
+        info!(
+            cn = %remote_cn,
+            session = %remote_session,
+            ours = %my_session,
+            "mdns-sd skipping peer in different session"
+        );
         return;
     }
 
-    let endpoints = endpoints_for(&info, remote_cn, state);
+    let endpoints = endpoints_for(&info, remote_cn);
     if endpoints.is_empty() {
         return;
     }
 
     if registry.set(info.get_fullname().to_string(), endpoints.clone()) {
-        state.lock().unwrap().push_log(format!(
-            "Discovered peer router: {} (+{} addr) (CN={remote_cn})",
-            endpoints[0],
-            endpoints.len() - 1,
-        ));
+        info!(
+            endpoint = %endpoints[0],
+            extra_count = endpoints.len() - 1,
+            cn = %remote_cn,
+            "discovered peer router"
+        );
     } else {
-        state.lock().unwrap().push_log(format!(
-            "mDNS[mdns-sd]: peer {remote_cn} unchanged, ignoring duplicate"
-        ));
+        info!(cn = %remote_cn, "mdns-sd peer unchanged, ignoring duplicate");
     }
 }
 
 /// Convert a resolved `ServiceInfo` into the list of Zenoh endpoints we'll
 /// connect to.  Prefers the peer's TXT `ip=` over whatever SRV/A resolution
 /// returned (see [`super::common::TXT_KEY_IP`] for why).
-fn endpoints_for(
-    info: &ServiceInfo,
-    remote_cn: &str,
-    state: &Arc<Mutex<AppState>>,
-) -> Vec<String> {
+fn endpoints_for(info: &ServiceInfo, remote_cn: &str) -> Vec<String> {
     let port = info.get_port();
 
     let txt_ipv4 = info
@@ -162,9 +146,7 @@ fn endpoints_for(
         .filter(|ip| !ip.is_loopback() && !ip.is_link_local());
 
     if let Some(ipv4) = txt_ipv4 {
-        state.lock().unwrap().push_log(format!(
-            "mDNS[mdns-sd]: using TXT ip={ipv4} for {remote_cn}"
-        ));
+        info!(ip = %ipv4, cn = %remote_cn, "mdns-sd using TXT ip");
         return vec![zenoh_tls_endpoint(std::net::IpAddr::V4(ipv4), port)];
     }
 
@@ -173,9 +155,7 @@ fn endpoints_for(
         .iter()
         .filter_map(|a| {
             if is_unroutable(a) {
-                state.lock().unwrap().push_log(format!(
-                    "mDNS[mdns-sd]: skipping unroutable addr {a}"
-                ));
+                info!(addr = %a, "mdns-sd skipping unroutable addr");
                 return None;
             }
             match a {
@@ -187,11 +167,11 @@ fn endpoints_for(
     endpoints.sort();
 
     if endpoints.is_empty() {
-        state.lock().unwrap().push_log(format!(
-            "mDNS[mdns-sd]: resolved {remote_cn} but no routable IPv4 \
-             (no TXT ip, addrs={:?}); skipping",
-            info.get_addresses().iter().collect::<Vec<_>>(),
-        ));
+        warn!(
+            cn = %remote_cn,
+            addrs = ?info.get_addresses().iter().collect::<Vec<_>>(),
+            "mdns-sd resolved peer with no routable IPv4; skipping"
+        );
     }
 
     endpoints

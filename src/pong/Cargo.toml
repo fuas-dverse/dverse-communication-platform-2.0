@@ -12,3 +12,4 @@ anyhow = "1"
 bot-framework = { path = "../bot_framework" }
 tokio = { version = "1", features = ["full"] }
 zenoh = "1.8.0"
+tracing = "0.1"

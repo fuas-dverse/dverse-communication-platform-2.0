@@ -13,12 +13,9 @@ mod announcing;
 mod browsing;
 mod common;
 
-use std::sync::{Arc, Mutex};
-
 use mdns_sd::ServiceDaemon;
 use tokio::sync::watch;
-
-use crate::state::AppState;
+use tracing::info;
 
 use self::common::create_filtered_daemon;
 
@@ -31,14 +28,9 @@ pub struct MdnsHandle {
 }
 
 impl MdnsHandle {
-    pub fn publish(
-        cn: &str,
-        session_id: &str,
-        port: u16,
-        state: &Arc<Mutex<AppState>>,
-    ) -> Option<Self> {
-        state.lock().unwrap().push_log("mDNS: using mdns-sd backend".to_string());
-        mdns_sd_start(cn, session_id, port, state)
+    pub fn publish(cn: &str, session_id: &str, port: u16) -> Option<Self> {
+        info!("mDNS: using mdns-sd backend");
+        mdns_sd_start(cn, session_id, port)
     }
 }
 
@@ -56,15 +48,10 @@ impl Drop for MdnsSdSession {
     }
 }
 
-fn mdns_sd_start(
-    cn: &str,
-    session_id: &str,
-    port: u16,
-    state: &Arc<Mutex<AppState>>,
-) -> Option<MdnsHandle> {
-    let daemon = create_filtered_daemon(state)?;
-    let fullname = announcing::mdns_sd_register(&daemon, cn, session_id, port, state)?;
-    let peer_rx = browsing::mdns_sd_start(&daemon, cn, session_id, state)?;
+fn mdns_sd_start(cn: &str, session_id: &str, port: u16) -> Option<MdnsHandle> {
+    let daemon = create_filtered_daemon()?;
+    let fullname = announcing::mdns_sd_register(&daemon, cn, session_id, port)?;
+    let peer_rx = browsing::mdns_sd_start(&daemon, cn, session_id)?;
     Some(MdnsHandle {
         _inner: MdnsSdSession { daemon, fullname },
         peer_rx,

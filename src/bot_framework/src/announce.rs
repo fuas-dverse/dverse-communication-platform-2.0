@@ -99,12 +99,12 @@ impl AgentAnnouncer {
                 let body = match serde_json::to_vec(&payload_template) {
                     Ok(b) => b,
                     Err(e) => {
-                        eprintln!("AgentAnnouncer: failed to serialize announce: {e}");
+                        tracing::warn!(error = %e, "AgentAnnouncer: failed to serialize announce");
                         continue;
                     }
                 };
                 if let Err(e) = session.put(&key_expr, body).await {
-                    eprintln!("AgentAnnouncer: put failed on {key_expr}: {e}");
+                    tracing::warn!(error = %e, key_expr = %key_expr, "AgentAnnouncer: put failed");
                 }
             }
         });
