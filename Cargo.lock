@@ -7266,6 +7266,7 @@ dependencies = [
  "dirs 5.0.1",
  "eframe",
  "egui",
+ "if-addrs",
  "mdns-sd",
  "reqwest",
  "serde_json",
