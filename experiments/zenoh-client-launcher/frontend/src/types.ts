@@ -1,8 +1,16 @@
 export type ConnectionStatus = "disconnected" | "pending" | "approved" | "denied";
 
+export interface DiscoveredRouter {
+  name: string;
+  host: string;
+  port: number;
+  zenohAddr: string;
+}
+
 export interface NetworkConfig {
-  routerAddress: string;
+  zenohAddr: string;       // selected router's tcp/host:port
   username: string;
+  password: string;
   assignedDns: string | null;
   status: ConnectionStatus;
 }

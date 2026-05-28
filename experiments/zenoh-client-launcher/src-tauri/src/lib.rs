@@ -1,7 +1,10 @@
+use futures_util::{pin_mut, stream::StreamExt};
+use mdns::RecordKind;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Child;
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::State;
 
 #[derive(Default)]
@@ -25,6 +28,75 @@ pub struct BotConfig {
 pub struct BotStatus {
     pub id: String,
     pub running: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DiscoveredRouter {
+    pub name: String,       // instance name from SRV record
+    pub host: String,       // resolved hostname or IP
+    pub port: u16,
+    pub zenoh_addr: String, // tcp/host:port ready to use
+}
+
+const DVERSE_SERVICE: &str = "_dverse._tcp.local";
+const DISCOVERY_TIMEOUT_MS: u64 = 3000;
+
+#[tauri::command]
+async fn discover_routers() -> Result<Vec<DiscoveredRouter>, String> {
+    let stream = mdns::discover::all(DVERSE_SERVICE, Duration::from_millis(DISCOVERY_TIMEOUT_MS))
+        .map_err(|e| format!("mDNS discovery failed: {e}"))?
+        .listen();
+    pin_mut!(stream);
+
+    let mut routers: HashMap<String, DiscoveredRouter> = HashMap::new();
+
+    let deadline = tokio::time::sleep(Duration::from_millis(DISCOVERY_TIMEOUT_MS));
+    tokio::pin!(deadline);
+
+    loop {
+        tokio::select! {
+            _ = &mut deadline => break,
+            item = stream.next() => {
+                let response = match item {
+                    Some(Ok(r)) => r,
+                    Some(Err(_)) => continue,
+                    None => break,
+                };
+
+                let mut host = String::new();
+                let mut port: u16 = 7447;
+                let mut name = String::new();
+
+                for record in response.records() {
+                    match &record.kind {
+                        RecordKind::A(addr) => {
+                            if host.is_empty() { host = addr.to_string(); }
+                        }
+                        RecordKind::AAAA(addr) => {
+                            if host.is_empty() { host = addr.to_string(); }
+                        }
+                        RecordKind::SRV { port: p, target, .. } => {
+                            port = *p;
+                            name = record.name.clone();
+                            if host.is_empty() { host = target.clone(); }
+                        }
+                        RecordKind::PTR(n) => {
+                            if name.is_empty() { name = n.clone(); }
+                        }
+                        _ => {}
+                    }
+                }
+
+                if !host.is_empty() {
+                    if name.is_empty() { name = host.clone(); }
+                    let zenoh_addr = format!("tcp/{host}:{port}");
+                    routers.insert(zenoh_addr.clone(), DiscoveredRouter { name, host, port, zenoh_addr });
+                }
+            }
+        }
+    }
+
+    Ok(routers.into_values().collect())
 }
 
 #[tauri::command]
@@ -146,6 +218,7 @@ pub fn run() {
             start_bot,
             stop_bot,
             get_bot_statuses,
+            discover_routers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
