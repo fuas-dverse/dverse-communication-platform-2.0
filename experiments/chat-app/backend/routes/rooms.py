@@ -265,6 +265,8 @@ def delete_bot(
     if not bot_row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
 
+    # Null out bot_id on messages before delete — SQLite FK prevents delete otherwise
+    db.execute("UPDATE messages SET bot_id = NULL WHERE bot_id = ?", (bot_id,))
     db.execute("DELETE FROM room_bots WHERE id = ?", (bot_id,))
     db.commit()
 

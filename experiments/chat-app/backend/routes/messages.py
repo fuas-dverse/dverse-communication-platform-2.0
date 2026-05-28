@@ -26,6 +26,7 @@ BOT_DEBUG_CONTEXT = os.environ.get("BOT_DEBUG_CONTEXT", "false").lower() in {
     "yes",
     "on",
 }
+MAX_BOT_HOPS = int(os.environ.get("MAX_BOT_HOPS", "4"))
 
 
 def _row_to_message(row) -> Message:
@@ -146,8 +147,8 @@ async def post_message(
 
         db.execute(
             """
-            INSERT INTO messages (id, room_id, user_id, content, is_bot, bot_id, bot_triggered_by, created_at)
-            VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+            INSERT INTO messages (id, room_id, user_id, content, is_bot, bot_id, bot_triggered_by, created_at, bot_hop_count)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, 0)
             """,
             (
                 placeholder_id,
@@ -186,6 +187,7 @@ async def post_message(
                 bot=triggered_bot,
                 triggering_message=body.content,
                 triggering_user_id=current_user.id,
+                bot_hop_count=0,
             )
         )
 
@@ -198,6 +200,7 @@ async def _generate_bot_response(
     bot: BotConfig,
     triggering_message: str,
     triggering_user_id: str,
+    bot_hop_count: int = 0,
 ):
     with logfire.span(
         "bot.generate_response",
@@ -206,6 +209,7 @@ async def _generate_bot_response(
         bot_provider=bot.provider,
         bot_personality=bot.personality,
         placeholder_id=placeholder_id,
+        bot_hop_count=bot_hop_count,
     ):
         await _generate_bot_response_inner(
             room_id=room_id,
@@ -213,6 +217,7 @@ async def _generate_bot_response(
             bot=bot,
             triggering_message=triggering_message,
             triggering_user_id=triggering_user_id,
+            bot_hop_count=bot_hop_count,
         )
 
 
@@ -222,6 +227,7 @@ async def _generate_bot_response_inner(
     bot: BotConfig,
     triggering_message: str,
     triggering_user_id: str,
+    bot_hop_count: int = 0,
 ):
     try:
         db = get_db()
@@ -277,8 +283,8 @@ async def _generate_bot_response_inner(
 
         # Update placeholder message with actual response
         db.execute(
-            "UPDATE messages SET content = ? WHERE id = ?",
-            (response_text, placeholder_id),
+            "UPDATE messages SET content = ?, bot_hop_count = ? WHERE id = ?",
+            (response_text, bot_hop_count, placeholder_id),
         )
         db.commit()
 
@@ -302,6 +308,66 @@ async def _generate_bot_response_inner(
             await broker.publish(
                 room_id, {"type": "replace", "message": updated_msg_dict}
             )
+
+        # Check if bot reply mentions another bot — chain the conversation
+        next_hop = bot_hop_count + 1
+        if next_hop <= MAX_BOT_HOPS:
+            # Scan all mentions, skip self, use first non-self match
+            all_mentions = re.findall(r"(?<!\w)@([a-zA-Z0-9-]+)\b", response_text)
+            mention = next(
+                (m.lower() for m in all_mentions if m.lower() != bot.name.lower()),
+                None,
+            )
+            if mention is not None:
+                next_bot_row = db.execute(
+                    "SELECT * FROM room_bots WHERE room_id = ? AND LOWER(name) = ?",
+                    (room_id, mention),
+                ).fetchone()
+                if next_bot_row:
+                    next_bot = BotConfig(**dict(next_bot_row))
+                    next_placeholder_id = str(uuid.uuid4())
+                    next_placeholder_at = datetime.utcnow().isoformat() + "Z"
+                    db.execute(
+                        """
+                        INSERT INTO messages (id, room_id, user_id, content, is_bot, bot_id, bot_triggered_by, created_at, bot_hop_count)
+                        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
+                        """,
+                        (
+                            next_placeholder_id,
+                            room_id,
+                            triggering_user_id,
+                            "thinking...",
+                            next_bot.id,
+                            triggering_user_id,
+                            next_placeholder_at,
+                            next_hop,
+                        ),
+                    )
+                    db.commit()
+                    next_placeholder_msg = Message(
+                        id=next_placeholder_id,
+                        room_id=room_id,
+                        user_id=triggering_user_id,
+                        username=f"@{next_bot.name}",
+                        content="thinking...",
+                        is_bot=True,
+                        bot_id=next_bot.id,
+                        bot_triggered_by=triggering_user_id,
+                        created_at=next_placeholder_at,
+                    )
+                    await broker.publish(
+                        room_id, {"type": "message", "message": next_placeholder_msg.model_dump()}
+                    )
+                    asyncio.create_task(
+                        _generate_bot_response(
+                            room_id=room_id,
+                            placeholder_id=next_placeholder_id,
+                            bot=next_bot,
+                            triggering_message=response_text,
+                            triggering_user_id=triggering_user_id,
+                            bot_hop_count=next_hop,
+                        )
+                    )
 
     except Exception as exc:
         # Update placeholder with error text

@@ -77,8 +77,8 @@ def call_llm(message: str, history: list[dict]) -> str:
 
     messages = [{"role": "system", "content": (
         f"You are @{BOT_NAME}, a helpful assistant in a group chat. "
-        f"Only respond when you are mentioned with @{BOT_NAME}. "
-        "Be concise and relevant."
+        "Be concise and relevant. "
+        "When your response addresses another bot, mention them with @theirname."
     )}] + history + [{"role": "user", "content": message}]
 
     response = httpx.post(
