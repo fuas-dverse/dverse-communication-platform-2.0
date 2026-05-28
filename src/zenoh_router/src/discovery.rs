@@ -39,11 +39,16 @@ pub struct MdnsHandle {
 }
 
 impl MdnsHandle {
-    pub fn publish(cn: &str, port: u16, state: &Arc<Mutex<AppState>>) -> Option<Self> {
+    pub fn publish(
+        cn: &str,
+        session_id: &str,
+        port: u16,
+        state: &Arc<Mutex<AppState>>,
+    ) -> Option<Self> {
         #[cfg(target_os = "linux")]
         {
             state.lock().unwrap().push_log("mDNS: trying avahi D-Bus backend…".to_string());
-            if let Some(handle) = linux_avahi_start(cn, port, Arc::clone(state)) {
+            if let Some(handle) = linux_avahi_start(cn, session_id, port, Arc::clone(state)) {
                 return Some(handle);
             }
             state.lock().unwrap().push_log(
@@ -52,7 +57,7 @@ impl MdnsHandle {
         }
         #[cfg(not(target_os = "linux"))]
         state.lock().unwrap().push_log("mDNS: using mdns-sd backend".to_string());
-        mdns_sd_start(cn, port, state)
+        mdns_sd_start(cn, session_id, port, state)
     }
 }
 
@@ -83,7 +88,12 @@ impl Drop for MdnsSdSession {
 // ── Linux: avahi D-Bus for publish AND browse ────────────────────────────────
 
 #[cfg(target_os = "linux")]
-fn linux_avahi_start(cn: &str, port: u16, state: Arc<Mutex<AppState>>) -> Option<MdnsHandle> {
+fn linux_avahi_start(
+    cn: &str,
+    session_id: &str,
+    port: u16,
+    state: Arc<Mutex<AppState>>,
+) -> Option<MdnsHandle> {
     use zbus::blocking::Connection;
 
     let publish_conn = match Connection::system() {
@@ -96,19 +106,19 @@ fn linux_avahi_start(cn: &str, port: u16, state: Arc<Mutex<AppState>>) -> Option
         }
     };
 
-    if let Err(e) = announcing::avahi_register(cn, port, &publish_conn) {
+    if let Err(e) = announcing::avahi_register(cn, session_id, port, &publish_conn) {
         state.lock().unwrap().push_log(format!("mDNS[avahi]: publish failed ({e})"));
         return None;
     }
     state.lock().unwrap().push_log(format!(
-        "mDNS[avahi]: published {} on {SERVICE_TYPE} port {port} addr={}",
+        "mDNS[avahi]: published {} on {SERVICE_TYPE} port {port} addr={} session={session_id}",
         instance_name(cn),
         detect_lan_ipv4()
             .map(|ip| ip.to_string())
             .unwrap_or_else(|| "unknown".to_string()),
     ));
 
-    match browsing::avahi_start(cn, Arc::clone(&state)) {
+    match browsing::avahi_start(cn, session_id, Arc::clone(&state)) {
         Some((browse_conn, peer_rx)) => {
             state.lock().unwrap().push_log("mDNS[avahi]: browse started".to_string());
             Some(MdnsHandle {
@@ -128,10 +138,15 @@ fn linux_avahi_start(cn: &str, port: u16, state: Arc<Mutex<AppState>>) -> Option
 
 // ── Cross-platform: one mdns-sd daemon for both publish and browse ───────────
 
-fn mdns_sd_start(cn: &str, port: u16, state: &Arc<Mutex<AppState>>) -> Option<MdnsHandle> {
+fn mdns_sd_start(
+    cn: &str,
+    session_id: &str,
+    port: u16,
+    state: &Arc<Mutex<AppState>>,
+) -> Option<MdnsHandle> {
     let daemon = create_filtered_daemon(state)?;
-    let fullname = announcing::mdns_sd_register(&daemon, cn, port, state)?;
-    let peer_rx = browsing::mdns_sd_start(&daemon, cn, state)?;
+    let fullname = announcing::mdns_sd_register(&daemon, cn, session_id, port, state)?;
+    let peer_rx = browsing::mdns_sd_start(&daemon, cn, session_id, state)?;
     Some(MdnsHandle {
         _inner: Inner::MdnsSd(MdnsSdSession { daemon, fullname }),
         peer_rx,

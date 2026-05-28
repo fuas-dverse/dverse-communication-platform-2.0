@@ -15,8 +15,8 @@ use crate::state::AppState;
 
 use super::common::{
     detect_lan_ipv4, instance_name, pinned_a_record_host, srv_host_name, txt_cn_entry,
-    txt_ip_entry, AVAHI_IF_UNSPEC, AVAHI_NO_FLAGS, AVAHI_PROTO_INET, AVAHI_PROTO_UNSPEC,
-    SERVICE_NAME, SERVICE_TYPE, TXT_KEY_CN, TXT_KEY_IP,
+    txt_ip_entry, txt_session_entry, AVAHI_IF_UNSPEC, AVAHI_NO_FLAGS, AVAHI_PROTO_INET,
+    AVAHI_PROTO_UNSPEC, SERVICE_NAME, SERVICE_TYPE, TXT_KEY_CN, TXT_KEY_IP, TXT_KEY_SESSION,
 };
 
 // ── mdns-sd ──────────────────────────────────────────────────────────────────
@@ -26,6 +26,7 @@ use super::common::{
 pub(super) fn mdns_sd_register(
     daemon: &ServiceDaemon,
     cn: &str,
+    session_id: &str,
     port: u16,
     state: &Arc<Mutex<AppState>>,
 ) -> Option<String> {
@@ -40,13 +41,18 @@ pub(super) fn mdns_sd_register(
             .unwrap_or_else(|| "unknown".to_string())
     ));
 
-    // TXT props: always `cn`, optionally `ip` for cross-stack address recovery.
+    // TXT props: always `cn` + `session`, optionally `ip` for cross-stack
+    // address recovery.
     let ip_str;
     let props: &[(&str, &str)] = if let Some(ip) = lan_ip {
         ip_str = ip.to_string();
-        &[(TXT_KEY_CN, cn), (TXT_KEY_IP, &ip_str)]
+        &[
+            (TXT_KEY_CN, cn),
+            (TXT_KEY_SESSION, session_id),
+            (TXT_KEY_IP, &ip_str),
+        ]
     } else {
-        &[(TXT_KEY_CN, cn)]
+        &[(TXT_KEY_CN, cn), (TXT_KEY_SESSION, session_id)]
     };
 
     // Pin the A record to the LAN IPv4 explicitly; without this mdns-sd
@@ -100,6 +106,7 @@ pub(super) fn mdns_sd_register(
 #[cfg(target_os = "linux")]
 pub(super) fn avahi_register(
     cn: &str,
+    session_id: &str,
     port: u16,
     conn: &zbus::blocking::Connection,
 ) -> anyhow::Result<()> {
@@ -117,7 +124,7 @@ pub(super) fn avahi_register(
     let instance = instance_name(cn);
     let lan_ip = detect_lan_ipv4();
 
-    let mut txt: Vec<Vec<u8>> = vec![txt_cn_entry(cn)];
+    let mut txt: Vec<Vec<u8>> = vec![txt_cn_entry(cn), txt_session_entry(session_id)];
     if let Some(ipv4) = lan_ip {
         txt.push(txt_ip_entry(ipv4));
     }

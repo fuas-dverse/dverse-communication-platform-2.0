@@ -74,6 +74,12 @@ pub(super) const TXT_KEY_CN: &str = "cn";
 /// Embedding the LAN IPv4 directly in TXT bypasses both.
 pub(super) const TXT_KEY_IP: &str = "ip";
 
+/// TXT key carrying the session identifier — the admin's CN for everyone
+/// participating in the session.  Browsers skip peers whose session value
+/// doesn't match their own, so two unrelated users on the same LAN don't
+/// auto-mesh their routers.
+pub(super) const TXT_KEY_SESSION: &str = "session";
+
 // ── Name builders ────────────────────────────────────────────────────────────
 
 /// Human-readable service instance name shown by DNS-SD browsers
@@ -123,6 +129,11 @@ pub(super) fn txt_cn_entry(cn: &str) -> Vec<u8> {
 /// `ip=<value>` TXT entry, byte-encoded for avahi `AddService`.
 pub(super) fn txt_ip_entry(ip: Ipv4Addr) -> Vec<u8> {
     format!("{TXT_KEY_IP}={ip}").into_bytes()
+}
+
+/// `session=<value>` TXT entry, byte-encoded for avahi `AddService`.
+pub(super) fn txt_session_entry(session_id: &str) -> Vec<u8> {
+    format!("{TXT_KEY_SESSION}={session_id}").into_bytes()
 }
 
 // ── IP detection ─────────────────────────────────────────────────────────────

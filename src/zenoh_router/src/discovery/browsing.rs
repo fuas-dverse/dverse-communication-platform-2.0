@@ -15,7 +15,7 @@ use crate::state::AppState;
 use super::common::{
     is_unroutable, peer_cache_key, zenoh_tls_endpoint, PeerRegistry, MDNS_DOMAIN,
     AVAHI_IF_UNSPEC, AVAHI_NO_FLAGS, AVAHI_PROTO_UNSPEC, SERVICE_NAME,
-    DBUS_MATCH_QUEUE_DEPTH, SERVICE_TYPE, TXT_KEY_CN, TXT_KEY_IP,
+    DBUS_MATCH_QUEUE_DEPTH, SERVICE_TYPE, TXT_KEY_CN, TXT_KEY_IP, TXT_KEY_SESSION,
 };
 
 // ── mdns-sd browse ───────────────────────────────────────────────────────────
@@ -26,6 +26,7 @@ use super::common::{
 pub(super) fn mdns_sd_start(
     daemon: &ServiceDaemon,
     my_cn: &str,
+    my_session: &str,
     state: &Arc<Mutex<AppState>>,
 ) -> Option<watch::Receiver<Vec<String>>> {
     let browse_rx = match daemon.browse(SERVICE_TYPE) {
@@ -41,12 +42,13 @@ pub(super) fn mdns_sd_start(
 
     let (registry, peer_rx) = PeerRegistry::new();
     let my_cn = my_cn.to_string();
+    let my_session = my_session.to_string();
     let state = Arc::clone(state);
 
     std::thread::spawn(move || {
         let mut registry = registry;
         while let Ok(event) = browse_rx.recv() {
-            handle_mdns_sd_event(event, &my_cn, &state, &mut registry);
+            handle_mdns_sd_event(event, &my_cn, &my_session, &state, &mut registry);
         }
         state.lock().unwrap().push_log("mDNS[mdns-sd]: browse loop exited".to_string());
     });
@@ -57,6 +59,7 @@ pub(super) fn mdns_sd_start(
 fn handle_mdns_sd_event(
     event: ServiceEvent,
     my_cn: &str,
+    my_session: &str,
     state: &Arc<Mutex<AppState>>,
     registry: &mut PeerRegistry,
 ) {
@@ -66,7 +69,9 @@ fn handle_mdns_sd_event(
                 "mDNS[mdns-sd]: found {fullname:?} (type={svc_type:?})"
             ));
         }
-        ServiceEvent::ServiceResolved(info) => handle_resolved(info, my_cn, state, registry),
+        ServiceEvent::ServiceResolved(info) => {
+            handle_resolved(info, my_cn, my_session, state, registry)
+        }
         ServiceEvent::ServiceRemoved(_, fullname) => {
             state
                 .lock()
@@ -90,13 +95,15 @@ fn handle_mdns_sd_event(
 fn handle_resolved(
     info: ServiceInfo,
     my_cn: &str,
+    my_session: &str,
     state: &Arc<Mutex<AppState>>,
     registry: &mut PeerRegistry,
 ) {
     let remote_cn = info.get_property_val_str(TXT_KEY_CN).unwrap_or_default();
+    let remote_session = info.get_property_val_str(TXT_KEY_SESSION).unwrap_or_default();
     let addrs: Vec<_> = info.get_addresses().iter().copied().collect();
     state.lock().unwrap().push_log(format!(
-        "mDNS[mdns-sd]: resolved {:?} cn={remote_cn:?} addrs={addrs:?} port={}",
+        "mDNS[mdns-sd]: resolved {:?} cn={remote_cn:?} session={remote_session:?} addrs={addrs:?} port={}",
         info.get_fullname(),
         info.get_port(),
     ));
@@ -104,6 +111,15 @@ fn handle_resolved(
     if remote_cn.is_empty() || remote_cn == my_cn {
         state.lock().unwrap().push_log(format!(
             "mDNS[mdns-sd]: skipping self or empty CN ({remote_cn:?})"
+        ));
+        return;
+    }
+
+    // Session filter: skip peers that belong to a different session.  Without
+    // this, two unrelated users on the same LAN would auto-mesh their routers.
+    if remote_session != my_session {
+        state.lock().unwrap().push_log(format!(
+            "mDNS[mdns-sd]: skipping peer {remote_cn} (session={remote_session:?}, ours={my_session:?})"
         ));
         return;
     }
@@ -195,6 +211,7 @@ fn endpoints_for(
 #[cfg(target_os = "linux")]
 pub(super) fn avahi_start(
     my_cn: &str,
+    my_session: &str,
     state: Arc<Mutex<AppState>>,
 ) -> Option<(zbus::blocking::Connection, watch::Receiver<Vec<String>>)> {
     use zbus::blocking::Connection;
@@ -223,11 +240,14 @@ pub(super) fn avahi_start(
     let conn_keepalive = conn.clone();
     let (registry, peer_rx) = PeerRegistry::new();
     let my_cn = my_cn.to_string();
+    let my_session = my_session.to_string();
 
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<String, String>>();
 
     std::thread::spawn(move || {
-        run_avahi_browse_thread(conn, conn_resolve, my_cn, state, registry, ready_tx);
+        run_avahi_browse_thread(
+            conn, conn_resolve, my_cn, my_session, state, registry, ready_tx,
+        );
     });
 
     match ready_rx.recv() {
@@ -241,6 +261,7 @@ fn run_avahi_browse_thread(
     conn: zbus::blocking::Connection,
     conn_resolve: zbus::blocking::Connection,
     my_cn: String,
+    my_session: String,
     state: Arc<Mutex<AppState>>,
     mut registry: PeerRegistry,
     ready_tx: std::sync::mpsc::Sender<Result<String, String>>,
@@ -268,7 +289,9 @@ fn run_avahi_browse_thread(
     state.lock().unwrap().push_log(format!("mDNS[avahi]: browser at {browser_path}"));
     ready_tx.send(Ok(browser_path.clone())).ok();
 
-    drain_avahi_signals(iter, &browser_path, &conn_resolve, &my_cn, &state, &mut registry);
+    drain_avahi_signals(
+        iter, &browser_path, &conn_resolve, &my_cn, &my_session, &state, &mut registry,
+    );
     state.lock().unwrap().push_log("mDNS[avahi]: signal loop exited".to_string());
 }
 
@@ -315,6 +338,7 @@ fn drain_avahi_signals(
     browser_path: &str,
     conn_resolve: &zbus::blocking::Connection,
     my_cn: &str,
+    my_session: &str,
     state: &Arc<Mutex<AppState>>,
     registry: &mut PeerRegistry,
 ) {
@@ -339,7 +363,9 @@ fn drain_avahi_signals(
         let Some(member) = msg.header().member().map(|m| m.to_owned()) else { continue };
 
         match member.as_str() {
-            "ItemNew" => handle_avahi_item_new(&msg, conn_resolve, my_cn, state, registry),
+            "ItemNew" => {
+                handle_avahi_item_new(&msg, conn_resolve, my_cn, my_session, state, registry)
+            }
             "ItemRemove" => handle_avahi_item_remove(&msg, state, registry),
             _ => {}
         }
@@ -351,6 +377,7 @@ fn handle_avahi_item_new(
     msg: &zbus::Message,
     conn_resolve: &zbus::blocking::Connection,
     my_cn: &str,
+    my_session: &str,
     state: &Arc<Mutex<AppState>>,
     registry: &mut PeerRegistry,
 ) {
@@ -368,7 +395,7 @@ fn handle_avahi_item_new(
          name={name:?} type={svc_type:?} domain={domain:?}"
     ));
 
-    let Some((host, address, port, remote_cn, txt_ipv4)) =
+    let Some((host, address, port, remote_cn, txt_ipv4, remote_session)) =
         resolve_avahi_service(conn_resolve, svc_iface, svc_proto, &name, &svc_type, &domain, state)
     else {
         return;
@@ -376,12 +403,21 @@ fn handle_avahi_item_new(
 
     state.lock().unwrap().push_log(format!(
         "mDNS[avahi]: resolved host={host:?} addr={address} port={port} \
-         cn={remote_cn:?} txt_ip={txt_ipv4:?}"
+         cn={remote_cn:?} session={remote_session:?} txt_ip={txt_ipv4:?}"
     ));
 
     if remote_cn.is_empty() || remote_cn == my_cn {
         state.lock().unwrap().push_log(format!(
             "mDNS[avahi]: skipping self or empty CN ({remote_cn:?})"
+        ));
+        return;
+    }
+
+    // Session filter: skip peers that belong to a different session.  Without
+    // this, two unrelated users on the same LAN would auto-mesh their routers.
+    if remote_session != my_session {
+        state.lock().unwrap().push_log(format!(
+            "mDNS[avahi]: skipping peer {remote_cn} (session={remote_session:?}, ours={my_session:?})"
         ));
         return;
     }
@@ -405,7 +441,8 @@ fn handle_avahi_item_new(
     }
 }
 
-/// Tuple returned by avahi `ResolveService`: `(host, address, port, cn, txt_ipv4)`.
+/// Tuple returned by avahi `ResolveService`:
+/// `(host, address, port, cn, txt_ipv4, session)`.
 #[cfg(target_os = "linux")]
 fn resolve_avahi_service(
     conn: &zbus::blocking::Connection,
@@ -415,7 +452,7 @@ fn resolve_avahi_service(
     svc_type: &str,
     domain: &str,
     state: &Arc<Mutex<AppState>>,
-) -> Option<(String, String, u16, String, Option<std::net::Ipv4Addr>)> {
+) -> Option<(String, String, u16, String, Option<std::net::Ipv4Addr>, String)> {
     let reply = match conn.call_method(
         Some("org.freedesktop.Avahi"),
         "/",
@@ -452,18 +489,20 @@ fn resolve_avahi_service(
         return None;
     };
 
-    let (remote_cn, txt_ipv4) = parse_dverse_txt(&txt);
-    Some((host, address, port, remote_cn, txt_ipv4))
+    let (remote_cn, txt_ipv4, remote_session) = parse_dverse_txt(&txt);
+    Some((host, address, port, remote_cn, txt_ipv4, remote_session))
 }
 
-/// Extract our DVerse-specific TXT entries (`cn=…`, `ip=…`) from the raw
-/// byte vectors avahi hands us.
+/// Extract our DVerse-specific TXT entries (`cn=…`, `ip=…`, `session=…`)
+/// from the raw byte vectors avahi hands us.
 #[cfg(target_os = "linux")]
-fn parse_dverse_txt(txt: &[Vec<u8>]) -> (String, Option<std::net::Ipv4Addr>) {
+fn parse_dverse_txt(txt: &[Vec<u8>]) -> (String, Option<std::net::Ipv4Addr>, String) {
     let cn_prefix = format!("{TXT_KEY_CN}=");
     let ip_prefix = format!("{TXT_KEY_IP}=");
+    let session_prefix = format!("{TXT_KEY_SESSION}=");
     let mut cn = String::new();
     let mut ip = None;
+    let mut session = String::new();
     for entry in txt {
         let Ok(s) = std::str::from_utf8(entry) else { continue };
         if let Some(rest) = s.strip_prefix(&cn_prefix) {
@@ -472,9 +511,11 @@ fn parse_dverse_txt(txt: &[Vec<u8>]) -> (String, Option<std::net::Ipv4Addr>) {
             if let Ok(parsed) = rest.parse::<std::net::Ipv4Addr>() {
                 ip = Some(parsed);
             }
+        } else if let Some(rest) = s.strip_prefix(&session_prefix) {
+            session = rest.to_string();
         }
     }
-    (cn, ip)
+    (cn, ip, session)
 }
 
 /// Choose the address for the peer endpoint:
