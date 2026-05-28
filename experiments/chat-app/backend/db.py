@@ -141,3 +141,9 @@ def _migrate(conn: sqlite3.Connection):
     if "system_prompt" not in bot_cols:
         conn.execute("ALTER TABLE room_bots ADD COLUMN system_prompt TEXT")
         conn.commit()
+
+    # Add bot_hop_count to messages — tracks depth in bot-to-bot conversation chains
+    msg_cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+    if "bot_hop_count" not in msg_cols:
+        conn.execute("ALTER TABLE messages ADD COLUMN bot_hop_count INTEGER DEFAULT 0")
+        conn.commit()

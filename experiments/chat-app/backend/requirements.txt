@@ -8,7 +8,7 @@ anthropic==0.40.0
 sse-starlette==2.1.3
 python-dotenv==1.0.1
 httpx==0.27.0
-logfire==4.34.0
+logfire[httpx]==4.34.0
 
 # OpenTelemetry — set OTEL_ENABLED=true to activate
 opentelemetry-sdk==1.41.1

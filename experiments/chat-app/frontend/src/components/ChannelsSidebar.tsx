@@ -1,5 +1,5 @@
 import { useState, type CSSProperties, type FormEvent } from "react"
-import { createRoom, addBot } from "../api/rooms"
+import { createRoom, addBot, deleteRoom } from "../api/rooms"
 import type { Room, User, BotProvider, BotPersonality, Server } from "../types"
 import { Icon } from "@iconify/react"
 import ServerSettings from "./ServerSettings"
@@ -12,6 +12,7 @@ interface Props {
   user: User | null
   onSelectRoom: (id: string) => void
   onRoomCreated: (room: Room) => void
+  onRoomDeleted: (roomId: string) => void
   onLogout: () => void
   loading: boolean
 }
@@ -21,7 +22,7 @@ const PERSONALITIES: BotPersonality[] = ["assistant", "coder", "creative", "anal
 
 export default function ChannelsSidebar({
   rooms, activeRoomId, activeServerId, activeServer, user,
-  onSelectRoom, onRoomCreated, onLogout, loading,
+  onSelectRoom, onRoomCreated, onRoomDeleted, onLogout, loading,
 }: Props) {
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [showServerSettings, setShowServerSettings] = useState(false)
@@ -237,7 +238,9 @@ export default function ChannelsSidebar({
             )}
             {textChannels.map((room) => (
               <ChannelItem key={room.id} room={room} active={room.id === activeRoomId}
-                onClick={() => onSelectRoom(room.id)} isAgent={false} />
+                onClick={() => onSelectRoom(room.id)} isAgent={false}
+                isOwner={user?.id === activeServer?.created_by}
+                onDelete={() => onRoomDeleted(room.id)} />
             ))}
 
             {agentRooms.length > 0 && (
@@ -245,7 +248,9 @@ export default function ChannelsSidebar({
                 <SectionHeader style={{ marginTop: "6px" }}>Agent Rooms</SectionHeader>
                 {agentRooms.map((room) => (
                   <ChannelItem key={room.id} room={room} active={room.id === activeRoomId}
-                    onClick={() => onSelectRoom(room.id)} isAgent={true} />
+                    onClick={() => onSelectRoom(room.id)} isAgent={true}
+                    isOwner={user?.id === activeServer?.created_by}
+                    onDelete={() => onRoomDeleted(room.id)} />
                 ))}
               </>
             )}
@@ -317,17 +322,32 @@ function SectionHeader({ children, style }: { children: string; style?: CSSPrope
   )
 }
 
-function ChannelItem({ room, active, onClick, isAgent }: {
+function ChannelItem({ room, active, onClick, isAgent, isOwner, onDelete }: {
   room: Room; active: boolean; onClick: () => void; isAgent: boolean
+  isOwner?: boolean; onDelete?: () => void
 }) {
   const [hovered, setHovered] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  async function handleDelete(e: React.MouseEvent) {
+    e.stopPropagation()
+    if (!confirm(`Delete channel "${room.name}"? This cannot be undone.`)) return
+    setDeleting(true)
+    try {
+      await deleteRoom(room.id)
+      onDelete?.()
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   return (
     <div
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        padding: "4px 14px", display: "flex", alignItems: "center", gap: "7px",
+        padding: "4px 8px 4px 14px", display: "flex", alignItems: "center", gap: "7px",
         cursor: "pointer", borderRadius: "4px", margin: "0 4px",
         color: isAgent ? "#57f2b8" : active || hovered ? "#e0e2ea" : "#9a9fad",
         fontSize: "13px",
@@ -344,6 +364,23 @@ function ChannelItem({ room, active, onClick, isAgent }: {
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
         {room.name}
       </span>
+      {isOwner && hovered && (
+        <button
+          onClick={handleDelete}
+          disabled={deleting}
+          title="Delete channel"
+          style={{
+            background: "transparent", border: "none", color: "#ed4245",
+            cursor: deleting ? "default" : "pointer", padding: "2px",
+            borderRadius: "4px", display: "flex", alignItems: "center", flexShrink: 0,
+            opacity: deleting ? 0.5 : 1,
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = "#3b1a1a" }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = "transparent" }}
+        >
+          <Icon icon="lucide:trash-2" style={{ fontSize: "12px" }} />
+        </button>
+      )}
     </div>
   )
 }
