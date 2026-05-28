@@ -183,7 +183,7 @@ async fn acquire_or_reuse(
     let ca = cert::ca_path(&cfg.cert_dir, "router");
 
     let max_age = Duration::from_secs(23 * 3600);
-    if cert::needs_renewal(&c, max_age).await {
+    if cert::needs_renewal(&c, max_age, Some(&cfg.operator_cn())).await {
         let cert_cfg = cfg.cert_config_for("router")?;
         cert::acquire(&cert_cfg).await
     } else {

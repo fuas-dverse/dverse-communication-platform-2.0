@@ -644,6 +644,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "toml",
+ "x509-parser",
  "zenoh",
 ]
 
