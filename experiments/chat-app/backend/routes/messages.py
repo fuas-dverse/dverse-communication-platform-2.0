@@ -30,13 +30,15 @@ MAX_BOT_HOPS = int(os.environ.get("MAX_BOT_HOPS", "4"))
 
 
 def _row_to_message(row) -> Message:
+    is_bot = bool(row["is_bot"])
+    username = f"@{row['bot_name']}" if is_bot and row["bot_name"] else row["username"]
     return Message(
         id=row["id"],
         room_id=row["room_id"],
         user_id=row["user_id"],
-        username=row["username"],
+        username=username,
         content=row["content"],
-        is_bot=bool(row["is_bot"]),
+        is_bot=is_bot,
         bot_id=row["bot_id"],
         bot_triggered_by=row["bot_triggered_by"],
         created_at=row["created_at"],
@@ -47,9 +49,10 @@ def _fetch_messages(db, room_id: str, after: Optional[str] = None) -> list[Messa
     if after:
         rows = db.execute(
             """
-            SELECT m.*, u.username
+            SELECT m.*, u.username, rb.name AS bot_name
             FROM messages m
             JOIN users u ON m.user_id = u.id
+            LEFT JOIN room_bots rb ON m.bot_id = rb.id
             WHERE m.room_id = ? AND m.created_at > ?
             ORDER BY m.created_at ASC
             LIMIT 100
@@ -59,9 +62,10 @@ def _fetch_messages(db, room_id: str, after: Optional[str] = None) -> list[Messa
     else:
         rows = db.execute(
             """
-            SELECT m.*, u.username
+            SELECT m.*, u.username, rb.name AS bot_name
             FROM messages m
             JOIN users u ON m.user_id = u.id
+            LEFT JOIN room_bots rb ON m.bot_id = rb.id
             WHERE m.room_id = ?
             ORDER BY m.created_at ASC
             LIMIT 100
@@ -291,9 +295,10 @@ async def _generate_bot_response_inner(
         # Fetch updated message to emit
         updated_row = db.execute(
             """
-            SELECT m.*, u.username
+            SELECT m.*, u.username, rb.name AS bot_name
             FROM messages m
             JOIN users u ON m.user_id = u.id
+            LEFT JOIN room_bots rb ON m.bot_id = rb.id
             WHERE m.id = ?
             """,
             (placeholder_id,),
@@ -301,12 +306,8 @@ async def _generate_bot_response_inner(
 
         if updated_row:
             updated_msg = _row_to_message(updated_row)
-            # Override username with bot name label
-            updated_msg_dict = updated_msg.model_dump()
-            updated_msg_dict["username"] = f"@{bot.name}"
-
             await broker.publish(
-                room_id, {"type": "replace", "message": updated_msg_dict}
+                room_id, {"type": "replace", "message": updated_msg.model_dump()}
             )
 
         # Check if bot reply mentions another bot — chain the conversation
@@ -382,9 +383,10 @@ async def _generate_bot_response_inner(
 
             updated_row = db.execute(
                 """
-                SELECT m.*, u.username
+                SELECT m.*, u.username, rb.name AS bot_name
                 FROM messages m
                 JOIN users u ON m.user_id = u.id
+                LEFT JOIN room_bots rb ON m.bot_id = rb.id
                 WHERE m.id = ?
                 """,
                 (placeholder_id,),
@@ -394,15 +396,9 @@ async def _generate_bot_response_inner(
                 return
 
             updated_msg = _row_to_message(updated_row)
-            updated_msg_dict = updated_msg.model_dump()
-            updated_msg_dict["username"] = f"@{bot.name}"
-
             await broker.publish(
                 room_id,
-                {
-                    "type": "replace",
-                    "message": updated_msg_dict,
-                },
+                {"type": "replace", "message": updated_msg.model_dump()},
             )
         except Exception:
             pass

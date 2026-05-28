@@ -133,6 +133,8 @@ export default function MainPage() {
                   if (prev.some((r) => r.id === payload.room.id)) return prev
                   return [...prev, payload.room]
                 })
+              } else if (payload.type === 'room_deleted') {
+                setRooms((prev) => prev.filter((r) => r.id !== payload.room_id))
               } else if (payload.type === 'member_joined') {
                 setServerMembers((prev) => {
                   if (prev.some((m) => m.user_id === payload.member.user_id))
@@ -343,6 +345,11 @@ export default function MainPage() {
     navigate(`/rooms/${room.id}`)
   }
 
+  function handleRoomDeleted(deletedRoomId: string) {
+    setRooms((prev) => prev.filter((r) => r.id !== deletedRoomId))
+    if (roomId === deletedRoomId) navigate('/rooms')
+  }
+
   return (
     <div
       style={{
@@ -365,6 +372,7 @@ export default function MainPage() {
         user={user}
         onSelectRoom={(id) => navigate(`/rooms/${id}`)}
         onRoomCreated={handleRoomCreated}
+        onRoomDeleted={handleRoomDeleted}
         onLogout={logout}
         loading={loadingRooms}
       />
