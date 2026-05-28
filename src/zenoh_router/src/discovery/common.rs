@@ -16,46 +16,9 @@ use crate::state::AppState;
 
 // ── Service identity ─────────────────────────────────────────────────────────
 
-/// Bare DNS-SD service name (RFC 6763) — `_<service>._<proto>`.
-/// Has no domain suffix; pair with [`MDNS_DOMAIN`] when an API expects them
-/// split (avahi D-Bus does), or use [`SERVICE_TYPE`] for the full form.
-pub(super) const SERVICE_NAME: &str = "_dverse._tcp";
-
-/// mDNS link-local domain (RFC 6762).  Always `"local"` for multicast DNS,
-/// regardless of which library publishes or browses.
-pub(super) const MDNS_DOMAIN: &str = "local";
-
-/// Fully-qualified DNS-SD service type with trailing dot, ready to drop into
-/// PTR record names or mdns-sd's `browse()` API.  Equals
-/// `concat!(SERVICE_NAME, ".", MDNS_DOMAIN, ".")` — kept as its own constant
-/// because `concat!` can only take literals.
+/// Fully-qualified DNS-SD service type with trailing dot, used as the PTR
+/// record name and the argument to mdns-sd's `browse()` / `ServiceInfo::new`.
 pub(super) const SERVICE_TYPE: &str = "_dverse._tcp.local.";
-
-// ── Avahi protocol sentinels ─────────────────────────────────────────────────
-// These are arbitrary numeric values defined by avahi's protocol enums in
-// <avahi-common/address.h> and <avahi-common/defs.h>.  They're not mDNS
-// standards — they're what the avahi D-Bus interface expects on the wire.
-
-/// `AvahiIfIndex` sentinel meaning "any/all interfaces" (`AVAHI_IF_UNSPEC`).
-pub(super) const AVAHI_IF_UNSPEC: i32 = -1;
-
-/// `AvahiProtocol` sentinel meaning "any address family" (`AVAHI_PROTO_UNSPEC`).
-pub(super) const AVAHI_PROTO_UNSPEC: i32 = -1;
-
-/// `AvahiProtocol` value for IPv4 (`AVAHI_PROTO_INET`).  Passed to
-/// `AddAddress` when we register an A record specifically (not AAAA).
-pub(super) const AVAHI_PROTO_INET: i32 = 0;
-
-/// `AvahiPublishFlags` / `AvahiLookupFlags` "none" value — we never need the
-/// publish/lookup/use_wide_area bits avahi defines.
-pub(super) const AVAHI_NO_FLAGS: u32 = 0;
-
-// ── D-Bus subscription tuning ────────────────────────────────────────────────
-
-/// Queue depth for the avahi ServiceBrowser D-Bus subscription.  64 covers
-/// the initial `ItemNew` cache-replay burst on busy mDNS networks with room
-/// to spare — typical announcement bursts are under ten messages.
-pub(super) const DBUS_MATCH_QUEUE_DEPTH: usize = 64;
 
 // ── TXT record keys ──────────────────────────────────────────────────────────
 
@@ -66,12 +29,9 @@ pub(super) const TXT_KEY_CN: &str = "cn";
 
 /// TXT key carrying the publisher's routable LAN IPv4.
 ///
-/// Workaround for two failure modes observed in testing:
-///   1. mdns-sd resolves via IPv6 first and reports only the link-local
-///      `fe80::` AAAA address — useless for cross-host TLS.
-///   2. avahi sometimes resolves SRV targets to loopback (`127.0.0.1`)
-///      when the local hostname has multiple A records.
-/// Embedding the LAN IPv4 directly in TXT bypasses both.
+/// Workaround for the failure mode where mdns-sd resolves via IPv6 first and
+/// reports only the link-local `fe80::` AAAA address — useless for cross-host
+/// TLS.  Embedding the LAN IPv4 directly in TXT bypasses it.
 pub(super) const TXT_KEY_IP: &str = "ip";
 
 /// TXT key carrying the session identifier — the admin's CN for everyone
@@ -88,52 +48,21 @@ pub(super) fn instance_name(cn: &str) -> String {
     format!("DVerse ({cn})")
 }
 
-/// SRV target hostname for our router instance.  Peers resolve this to
-/// our address records to find us at the network layer.  Per-CN (rather
-/// than the machine's default hostname) so multiple test routers on one
-/// host don't collide.
+/// SRV target hostname for our router instance.  Peers resolve this to the
+/// A record mdns-sd registers via `ServiceInfo::new`.  Per-CN (rather than
+/// the machine's default hostname) so multiple test routers on one host
+/// don't collide.
+///
+/// Matches the Step-CA x509 template's `SAN = DNS:zenoh-<cn>.local`, so the
+/// TLS handshake validates whether agents connect by hostname or by IP.
 pub(super) fn srv_host_name(cn: &str) -> String {
     format!("zenoh-{cn}.local.")
-}
-
-/// Custom A-record hostname registered alongside the avahi service,
-/// pinned to the detected LAN IPv4.  Pinning a dedicated A record makes
-/// SRV resolution deterministic — avahi's default hostname can resolve
-/// to loopback, link-local, and LAN addresses all at once.
-pub(super) fn pinned_a_record_host(cn: &str) -> String {
-    format!("dverse-{cn}.local.")
-}
-
-/// Cache key for tracking a discovered peer's endpoints.  avahi's
-/// `ItemNew` signal gives `(name, svc_type, domain)` separately — this
-/// re-assembles them into the same fullname mdns-sd reports, so both
-/// backends share the same key shape.
-pub(super) fn peer_cache_key(name: &str, svc_type: &str) -> String {
-    format!("{name}.{svc_type}.")
 }
 
 /// Zenoh endpoint URI for the router's `connect/endpoints` config.
 /// Zenoh's URI form is `<protocol>/<host>:<port>`; dverse runs mTLS.
 pub(super) fn zenoh_tls_endpoint(ip: IpAddr, port: u16) -> String {
     format!("tls/{ip}:{port}")
-}
-
-// ── TXT entry builders ───────────────────────────────────────────────────────
-
-/// `cn=<value>` TXT entry, byte-encoded for avahi `AddService`.
-/// (mdns-sd takes `(&str, &str)` tuples instead; see [`TXT_KEY_CN`].)
-pub(super) fn txt_cn_entry(cn: &str) -> Vec<u8> {
-    format!("{TXT_KEY_CN}={cn}").into_bytes()
-}
-
-/// `ip=<value>` TXT entry, byte-encoded for avahi `AddService`.
-pub(super) fn txt_ip_entry(ip: Ipv4Addr) -> Vec<u8> {
-    format!("{TXT_KEY_IP}={ip}").into_bytes()
-}
-
-/// `session=<value>` TXT entry, byte-encoded for avahi `AddService`.
-pub(super) fn txt_session_entry(session_id: &str) -> Vec<u8> {
-    format!("{TXT_KEY_SESSION}={session_id}").into_bytes()
 }
 
 // ── IP detection ─────────────────────────────────────────────────────────────
@@ -266,26 +195,12 @@ impl PeerRegistry {
 
     /// Replace the full endpoint list for one peer.  Returns `true` if the
     /// list actually changed (callers use this to suppress duplicate log
-    /// lines when a backend re-fires events for already-known peers).
+    /// lines when the backend re-fires events for already-known peers).
     pub(super) fn set(&mut self, key: String, endpoints: Vec<String>) -> bool {
         if self.peers.get(&key).map(|v| v.as_slice()) == Some(endpoints.as_slice()) {
             return false;
         }
         self.peers.insert(key, endpoints);
-        let _ = self.tx.send(self.flatten());
-        true
-    }
-
-    /// Append one endpoint to a peer's set.  Used by the avahi backend,
-    /// which receives per-interface events and accumulates endpoints
-    /// incrementally.  Returns `true` if the endpoint was new.
-    pub(super) fn add_one(&mut self, key: String, endpoint: String) -> bool {
-        let entry = self.peers.entry(key).or_default();
-        if entry.contains(&endpoint) {
-            return false;
-        }
-        entry.push(endpoint);
-        entry.sort();
         let _ = self.tx.send(self.flatten());
         true
     }

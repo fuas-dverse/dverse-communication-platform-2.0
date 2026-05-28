@@ -7271,7 +7271,6 @@ dependencies = [
  "reqwest",
  "serde_json",
  "tokio",
- "zbus",
  "zenoh",
 ]
 
