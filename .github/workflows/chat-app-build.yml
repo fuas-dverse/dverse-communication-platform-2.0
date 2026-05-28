@@ -6,10 +6,15 @@ concurrency:
 
 on:
   push:
+    branches:
+      - develop
+      - "feature/**"
     paths:
       - "experiments/chat-app/**"
       - ".github/workflows/chat-app-build.yml"
   pull_request:
+    branches:
+      - main
     paths:
       - "experiments/chat-app/**"
       - ".github/workflows/chat-app-build.yml"
@@ -51,16 +56,26 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
+
+      - name: Cache virtualenv
+        id: cache-venv
+        uses: actions/cache@v4
+        with:
+          path: experiments/chat-app/.venv
+          key: venv-${{ runner.os }}-3.11-${{ hashFiles('experiments/chat-app/backend/requirements.txt') }}
 
       - name: Install backend dependencies
-        run: python -m pip install --upgrade pip && pip install -r backend/requirements.txt
+        if: steps.cache-venv.outputs.cache-hit != 'true'
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r backend/requirements.txt
+          .venv/bin/pip install coverage
 
       - name: Run backend tests with coverage
         run: |
-          pip install coverage
-          PYTHONPATH=. coverage run --source=backend -m unittest discover -s backend/tests -v
-          coverage xml -o coverage.xml
+          PYTHONPATH=. .venv/bin/coverage run --source=backend -m unittest discover -s backend/tests -v
+          .venv/bin/coverage xml -o coverage.xml
 
       - name: Upload backend coverage report
         uses: actions/upload-artifact@v4
@@ -70,6 +85,7 @@ jobs:
 
   backend-build:
     needs: backend-test
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
 
     defaults:
@@ -84,15 +100,25 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
+
+      - name: Cache virtualenv
+        id: cache-venv
+        uses: actions/cache@v4
+        with:
+          path: experiments/chat-app/.venv
+          key: venv-${{ runner.os }}-3.11-${{ hashFiles('experiments/chat-app/backend/requirements.txt') }}
 
       - name: Install backend dependencies
-        run: python -m pip install --upgrade pip && pip install -r backend/requirements.txt
+        if: steps.cache-venv.outputs.cache-hit != 'true'
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r backend/requirements.txt
 
       - name: Validate backend sources
         run: |
-          python -m compileall backend
-          python -m py_compile bot_agent.py
+          .venv/bin/python -m compileall backend
+          .venv/bin/python -m py_compile bot_agent.py
 
   frontend-test:
     runs-on: ubuntu-latest
@@ -123,6 +149,7 @@ jobs:
 
   frontend-build:
     needs: frontend-test
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
 
     defaults:
@@ -149,6 +176,7 @@ jobs:
       - backend-build
       - frontend-test
       - frontend-build
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     env:
       CODACY_KEY: ${{ secrets.CODACY_KEY }}

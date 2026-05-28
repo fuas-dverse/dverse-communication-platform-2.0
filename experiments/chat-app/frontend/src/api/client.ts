@@ -14,6 +14,16 @@ export function clearToken(): void {
   localStorage.removeItem("token")
 }
 
+function randomHex(bytes: number): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(bytes)))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("")
+}
+
+function generateTraceparent(): string {
+  return `00-${randomHex(16)}-${randomHex(8)}-01`
+}
+
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
@@ -23,6 +33,7 @@ export async function apiFetch<T>(
     ...options,
     headers: {
       "Content-Type": "application/json",
+      traceparent: generateTraceparent(),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },

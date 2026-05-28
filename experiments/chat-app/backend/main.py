@@ -1,14 +1,21 @@
 import asyncio
 
+import logfire
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from .db import init_db
+from .observability import setup_logfire
 from .routes import auth, rooms, messages, servers
+from .telemetry import setup_telemetry
 
 load_dotenv()
+setup_logfire()
+
+_otel_enabled = setup_telemetry()
 
 app = FastAPI(title="ChatApp API")
+logfire.instrument_fastapi(app)
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,6 +24,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if _otel_enabled:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    FastAPIInstrumentor().instrument_app(app)
 
 
 @app.on_event("startup")

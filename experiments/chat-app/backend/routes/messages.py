@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+import logfire
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
@@ -198,6 +199,30 @@ async def _generate_bot_response(
     triggering_message: str,
     triggering_user_id: str,
 ):
+    with logfire.span(
+        "bot.generate_response",
+        room_id=room_id,
+        bot_name=bot.name,
+        bot_provider=bot.provider,
+        bot_personality=bot.personality,
+        placeholder_id=placeholder_id,
+    ):
+        await _generate_bot_response_inner(
+            room_id=room_id,
+            placeholder_id=placeholder_id,
+            bot=bot,
+            triggering_message=triggering_message,
+            triggering_user_id=triggering_user_id,
+        )
+
+
+async def _generate_bot_response_inner(
+    room_id: str,
+    placeholder_id: str,
+    bot: BotConfig,
+    triggering_message: str,
+    triggering_user_id: str,
+):
     try:
         db = get_db()
 
@@ -223,19 +248,14 @@ async def _generate_bot_response(
         ]
 
         if BOT_DEBUG_CONTEXT:
-            print(
-                f"[bot-context] room={room_id} bot=@{bot.name} "
-                f"history_count={len(history)} limit={BOT_HISTORY_LIMIT}",
-                flush=True,
+            logfire.debug(
+                "bot-context",
+                room_id=room_id,
+                bot_name=bot.name,
+                history_count=len(history),
+                history_limit=BOT_HISTORY_LIMIT,
+                trigger_snippet=triggering_message.replace("\n", " ").strip()[:160],
             )
-            for idx, item in enumerate(history, start=1):
-                snippet = item["content"].replace("\n", " ").strip()[:160]
-                print(
-                    f"[bot-context] {idx:02d} role={item['role']} content={snippet}",
-                    flush=True,
-                )
-            trigger_snippet = triggering_message.replace("\n", " ").strip()[:160]
-            print(f"[bot-context] trigger content={trigger_snippet}", flush=True)
 
         from ..models.bot import BotProvider
         from ..services.zenoh_bridge import zenoh_bridge

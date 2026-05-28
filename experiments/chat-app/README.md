@@ -78,27 +78,33 @@ This starts:
 
 - Ollama on http://localhost:11434
 
-### 2. Start the backend
+### 2. Start telemetry services
+
+To enable distributed tracing and metrics (Jaeger, OpenTelemetry Collector, Prometheus, Grafana):
+
+```bash
+
+docker-compose up jaeger otelcol prometheus grafana -d
+
+```
+
+Set `OTEL_ENABLED=true` in your `.env` file to activate telemetry in the backend.
+
+### 3. Start the backend
 
 From experiments/chat-app/:
 
 ```bash
 
-cd backend
+pip install -r backend/requirements.txt
 
-python -m venv .venv
-
-source .venv/bin/activate
-
-pip install -r requirements.txt
-
-python run.py
+python -m uvicorn backend.main:app --reload --port 8001
 
 ```
 
-The API runs on http://localhost:8000.
+The API runs on http://localhost:8001.
 
-### 3. Start the frontend
+### 4. Start the frontend
 
 From experiments/chat-app/frontend/:
 
@@ -106,7 +112,7 @@ From experiments/chat-app/frontend/:
 
 npm install
 
-npm run dev
+volta run --node 22 npm run dev
 
 ```
 
