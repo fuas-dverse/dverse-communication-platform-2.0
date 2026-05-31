@@ -495,25 +495,31 @@ fn show_main(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>) {
 
     // Session badge — declared first so it renders above status_bar.  egui's
     // top panels stack in declaration order.
-    egui::TopBottomPanel::top("session_bar").show(ctx, |ui| {
-        ui.horizontal(|ui| {
-            ui.label("Session:");
-            match &st.session_role {
-                SessionRole::Admin => {
-                    ui.colored_label(
-                        egui::Color32::LIGHT_BLUE,
-                        format!("Admin · {}", st.session_id),
-                    );
+    //
+    // Hidden entirely until a config has been accepted (signalled by a
+    // non-empty `session_id`).  Otherwise the Admin variant would render
+    // `Admin · ` with an empty CN during the Idle / Acquiring states.
+    if !st.session_id.is_empty() {
+        egui::TopBottomPanel::top("session_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Session:");
+                match &st.session_role {
+                    SessionRole::Admin => {
+                        ui.colored_label(
+                            egui::Color32::LIGHT_BLUE,
+                            format!("Admin · {}", st.session_id),
+                        );
+                    }
+                    SessionRole::Client { admin_cn } => {
+                        ui.colored_label(
+                            egui::Color32::LIGHT_GREEN,
+                            format!("Joined · admin: {admin_cn}"),
+                        );
+                    }
                 }
-                SessionRole::Client { admin_cn } => {
-                    ui.colored_label(
-                        egui::Color32::LIGHT_GREEN,
-                        format!("Joined · admin: {admin_cn}"),
-                    );
-                }
-            }
+            });
         });
-    });
+    }
 
     egui::TopBottomPanel::top("status_bar").show(ctx, |ui| {
         ui.horizontal(|ui| {
