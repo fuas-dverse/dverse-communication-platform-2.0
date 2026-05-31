@@ -27,26 +27,14 @@ use tracing_subscriber::{fmt, EnvFilter, Layer};
 
 use crate::state::AppState;
 
-/// Default RUST_LOG when the env var isn't set.  Mirrors
-/// `bot_framework::logging::init`'s defaults — kept in sync intentionally so
-/// the router and the CLI agents log at the same verbosity by default.
-const DEFAULT_FILTER: &str = concat!(
-    "info,",
-    "zenoh=warn,",
-    "zenoh_runtime=warn,",
-    "rustls=warn,",
-    "mio=warn,",
-    "hyper=warn,",
-    "reqwest=warn,",
-    "zbus=warn,",
-);
-
 /// Install the global tracing subscriber.  Must be called once, early, from
 /// the router binary's `main` — `bot_framework::logging::init` is NOT used
-/// here because we want the extra GUI layer.
+/// here because we want the extra GUI layer.  The default filter is sourced
+/// from `bot_framework::logging::DEFAULT_FILTER` so the CLI agents and the
+/// router stay in lockstep on verbosity defaults.
 pub fn init_with_gui_sink(state: Arc<Mutex<AppState>>) {
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
+        .unwrap_or_else(|_| EnvFilter::new(bot_framework::logging::DEFAULT_FILTER));
 
     let fmt_layer = fmt::layer().with_target(true).with_level(true).compact();
     let gui_layer = GuiLogLayer { state };

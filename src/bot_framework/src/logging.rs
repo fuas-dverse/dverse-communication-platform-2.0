@@ -22,7 +22,10 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 /// Default filter applied when `RUST_LOG` isn't set.  Our own crates at
 /// `info`; Zenoh, rustls, and the usual noisy transitives at `warn` so the
 /// log doesn't flood at default verbosity but errors/warns still surface.
-const DEFAULT_FILTER: &str = concat!(
+///
+/// Public so the router (which installs its own subscriber to add the GUI
+/// layer) can apply exactly the same defaults without re-declaring them.
+pub const DEFAULT_FILTER: &str = concat!(
     "info,",
     "zenoh=warn,",
     "zenoh_runtime=warn,",
