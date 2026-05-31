@@ -110,6 +110,17 @@ fn handle_resolved(
 
     // Session filter: skip peers that belong to a different session.  Without
     // this, two unrelated users on the same LAN would auto-mesh their routers.
+    //
+    // Separate log line for "no session= TXT" because `unwrap_or_default()`
+    // collapses a missing TXT key and a literal empty string to the same ""
+    // value, and the failure mode (older binary, manual `dns-sd` test) is
+    // diagnostically different from "different session running on the LAN".
+    if remote_session.is_empty() {
+        state.lock().unwrap().push_log(format!(
+            "mDNS[mdns-sd]: skipping peer {remote_cn} — no session= TXT key (likely older or non-DVerse announcement)"
+        ));
+        return;
+    }
     if remote_session != my_session {
         state.lock().unwrap().push_log(format!(
             "mDNS[mdns-sd]: skipping peer {remote_cn} (session={remote_session:?}, ours={my_session:?})"
