@@ -309,6 +309,18 @@ pub async fn needs_renewal(
         return true;
     }
     if let Some(expected) = expected_cn {
+        // Guard against an empty expected CN — every cert has a non-empty
+        // Subject CN, so `cn == ""` would never match and we'd force renewal
+        // on every call (and the freshly-renewed cert would have the same
+        // mismatch, looping indefinitely).  Treat empty as "no CN check".
+        if expected.is_empty() {
+            eprintln!(
+                "cert: needs_renewal called with empty expected_cn; \
+                 skipping CN check to avoid a renewal loop \
+                 (likely a misconfigured operator_cn — investigate)"
+            );
+            return false;
+        }
         return match cert_subject_cn(cert_path).await {
             Some(cn) if cn == expected => false,
             _ => true,
