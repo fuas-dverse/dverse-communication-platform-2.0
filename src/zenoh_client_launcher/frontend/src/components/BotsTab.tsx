@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
-import type { BotConfig, BotStatus, Personality, LlmBackend } from "../types";
+import type { BotConfig, BotStatus } from "../types";
 import BotCard from "./BotCard";
 import BotForm from "./BotForm";
 
