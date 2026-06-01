@@ -14,7 +14,7 @@ async fn main() -> Result<()> {
     let key_path  = cert::key_path(&cfg.cert_dir, NODE_NAME);
     let ca_path   = cert::ca_path(&cfg.cert_dir, NODE_NAME);
 
-    if cert::needs_renewal(&cert_path, Duration::from_secs(23 * 3600)).await {
+    if cert::needs_renewal(&cert_path, Duration::from_secs(23 * 3600), Some(&cfg.operator_cn())).await {
         println!("[{NODE_NAME}] Acquiring certificate…");
         let cert_cfg = cfg.cert_config_for(NODE_NAME)?;
         cert::acquire(&cert_cfg).await?;

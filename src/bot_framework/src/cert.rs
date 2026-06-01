@@ -269,13 +269,62 @@ pub async fn bootstrap_ca_root(ca_url: &str, out_path: &Path) -> Result<String> 
     Ok(pem)
 }
 
-/// Returns true if the cert file does not exist or is older than `max_age`.
-pub async fn needs_renewal(cert_path: &Path, max_age: std::time::Duration) -> bool {
-    match tokio::fs::metadata(cert_path).await {
-        Ok(meta) => match meta.modified() {
-            Ok(modified) => modified.elapsed().unwrap_or(max_age) >= max_age,
-            Err(_) => true,
-        },
-        Err(_) => true,
+/// Read a PEM-encoded X.509 cert and return its Subject CN.
+/// Returns `None` if the file can't be read, isn't valid PEM, or has no CN
+/// in its Subject — all cases the caller should treat as "force renewal".
+async fn cert_subject_cn(cert_path: &Path) -> Option<String> {
+    use x509_parser::prelude::FromDer;
+
+    let pem_text = tokio::fs::read(cert_path).await.ok()?;
+    let (_, pem) = x509_parser::pem::parse_x509_pem(&pem_text).ok()?;
+    let (_, cert) = x509_parser::certificate::X509Certificate::from_der(&pem.contents).ok()?;
+    cert.subject()
+        .iter_common_name()
+        .next()?
+        .as_str()
+        .ok()
+        .map(str::to_string)
+}
+
+/// Returns true if the cert file is missing, older than `max_age`, or was
+/// issued for a different `expected_cn` than the current operator.
+///
+/// `expected_cn` is optional: pass `Some(cn)` from the router/agent paths
+/// to force renewal when the cached cert was issued for a different user
+/// (the cert files live at the same path regardless of which user is signed
+/// in, so without the check, switching accounts silently keeps presenting
+/// the old identity and the TLS SAN mismatches at the next handshake).
+/// Pass `None` from generic tooling that only cares about file age.
+pub async fn needs_renewal(
+    cert_path: &Path,
+    max_age: std::time::Duration,
+    expected_cn: Option<&str>,
+) -> bool {
+    let Ok(meta) = tokio::fs::metadata(cert_path).await else { return true };
+    if meta
+        .modified()
+        .map(|m| m.elapsed().unwrap_or(max_age) >= max_age)
+        .unwrap_or(true)
+    {
+        return true;
     }
+    if let Some(expected) = expected_cn {
+        // Guard against an empty expected CN — every cert has a non-empty
+        // Subject CN, so `cn == ""` would never match and we'd force renewal
+        // on every call (and the freshly-renewed cert would have the same
+        // mismatch, looping indefinitely).  Treat empty as "no CN check".
+        if expected.is_empty() {
+            eprintln!(
+                "cert: needs_renewal called with empty expected_cn; \
+                 skipping CN check to avoid a renewal loop \
+                 (likely a misconfigured operator_cn — investigate)"
+            );
+            return false;
+        }
+        return match cert_subject_cn(cert_path).await {
+            Some(cn) if cn == expected => false,
+            _ => true,
+        };
+    }
+    false
 }
