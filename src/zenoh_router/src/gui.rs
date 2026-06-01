@@ -1,11 +1,11 @@
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use bot_framework::config::{DverseConfig, SessionRole};
 
 use crate::constants::{CA_URL, CLIENT_ID, CLIENT_SECRET, KEYCLOAK_REALM, KEYCLOAK_URL, REGISTRATION_CLIENT_ID, REGISTRATION_CLIENT_SECRET, ROUTER_LISTEN, ROUTER_PORT};
-use crate::state::{AppState, RouterStatus};
+use crate::state::{AgentStatus, AppState, RouterStatus};
 
 // ── Screen state (GUI thread only) ─────────────────────────────────────────────
 
@@ -552,15 +552,58 @@ fn show_main(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>) {
     egui::CentralPanel::default().show(ctx, |ui| {
         ui.heading("Connected nodes");
         ui.add_space(6.0);
-        if st.admitted.is_empty() {
+        if st.connected_nodes.is_empty() {
             ui.weak("Waiting for nodes to connect…");
         } else {
-            for cn in &st.admitted {
-                ui.horizontal(|ui| {
-                    ui.colored_label(egui::Color32::GREEN, "●");
-                    ui.label(cn);
-                });
-            }
+            let now = Instant::now();
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                // Sort CNs alphabetically for a stable display order between
+                // repaints; egui repaints frequently and HashMap iteration
+                // order would otherwise jitter.
+                let mut cns: Vec<&String> = st.connected_nodes.keys().collect();
+                cns.sort();
+                for cn in cns {
+                    let node = &st.connected_nodes[cn];
+                    egui::CollapsingHeader::new(cn)
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            if node.agents.is_empty() {
+                                ui.weak("(no agents reported)");
+                                return;
+                            }
+                            let mut agent_names: Vec<&String> = node.agents.keys().collect();
+                            agent_names.sort();
+                            for name in agent_names {
+                                let ag = &node.agents[name];
+                                ui.horizontal(|ui| {
+                                    match ag.status {
+                                        AgentStatus::Online => {
+                                            ui.colored_label(egui::Color32::GREEN, "●");
+                                        }
+                                        AgentStatus::Degraded => {
+                                            ui.colored_label(egui::Color32::YELLOW, "●");
+                                        }
+                                        AgentStatus::Offline => {
+                                            ui.colored_label(egui::Color32::GRAY, "●");
+                                        }
+                                    }
+                                    ui.monospace(name);
+                                    ui.weak(format!("v{}", ag.version));
+                                    ui.weak("·");
+                                    ui.weak(format_ago(now.saturating_duration_since(ag.last_seen)));
+                                });
+                                if !ag.key_expressions.is_empty() {
+                                    ui.indent(format!("ke_{cn}_{name}"), |ui| {
+                                        for ke in &ag.key_expressions {
+                                            ui.monospace(format!("• {ke}"));
+                                        }
+                                    });
+                                }
+                                ui.add_space(2.0);
+                            }
+                        });
+                }
+            });
         }
     });
 }
@@ -571,5 +614,17 @@ fn info_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.weak(label);
     ui.weak(value);
     ui.end_row();
+}
+
+/// Render a duration as a human-friendly "Ns ago" / "Nm Ms ago" string.
+fn format_ago(d: Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m {}s ago", secs / 60, secs % 60)
+    } else {
+        format!("{}h {}m ago", secs / 3600, (secs % 3600) / 60)
+    }
 }
 

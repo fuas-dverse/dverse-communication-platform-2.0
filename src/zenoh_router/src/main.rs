@@ -44,10 +44,31 @@ fn run_normal() {
 }
 
 fn run_demo() {
+    use std::collections::HashMap;
+    use std::time::Instant;
+    use state::{AgentInfo, AgentStatus, NodeInfo};
+
     let mut state = AppState::new(None);
     state.admitted = vec!["alice".into(), "mybot".into()];
     state.router_status = state::RouterStatus::Running;
     state.session_id = "alice".into();
+
+    let now = Instant::now();
+    let mut alice_agents = HashMap::new();
+    alice_agents.insert(
+        "ping".to_string(),
+        AgentInfo {
+            version: "0.1.0".into(),
+            key_expressions: vec!["dverse/ping".into(), "dverse/pong".into()],
+            status: AgentStatus::Online,
+            last_seen: now,
+        },
+    );
+    state.connected_nodes.insert(
+        "alice".into(),
+        NodeInfo { cn: "alice".into(), last_seen: now, agents: alice_agents },
+    );
+
     state.push_log("[demo] Router started on tcp/0.0.0.0:7447");
     state.push_log("[demo] Session admin: alice");
     state.push_log("[demo] Auto-admitted: alice");

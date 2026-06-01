@@ -1,12 +1,15 @@
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use bot_framework::announce::AgentAnnounce;
 use bot_framework::cert;
 use bot_framework::config::{DverseConfig, SessionRole};
 use tokio::sync::watch;
 use zenoh::Session;
 
+use crate::constants::AGENT_HEARTBEAT_INTERVAL;
 use crate::discovery::MdnsHandle;
 use crate::state::{AppState, RouterStatus};
 
@@ -21,6 +24,10 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
     let mut _mdns: Option<MdnsHandle> = None;
     // Carries the current set of discovered peer endpoints; starts empty.
     let (_, mut peer_rx): (_, watch::Receiver<Vec<String>>) = watch::channel(vec![]);
+    // Spawned once on first Running; kept across session restarts because
+    // eviction is wall-clock driven and independent of which Zenoh session
+    // is live.
+    let mut reaper_started = false;
 
     loop {
         // ── Phase 1: obtain config ───────────────────────────────────────────
@@ -157,6 +164,33 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
             s.push_log("Router running.");
         }
 
+        // Wall-clock stale-eviction task — spawned once.  Drives the
+        // Online→Degraded→Offline ladder and removes agents whose heartbeats
+        // stop landing.  Independent of the Zenoh session lifecycle, so it
+        // outlives ACL/peer restarts.
+        if !reaper_started {
+            let state_for_reap = Arc::clone(&state);
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(AGENT_HEARTBEAT_INTERVAL);
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tick.tick().await;
+                    let now = Instant::now();
+                    let evicted = {
+                        let mut st = state_for_reap.lock().unwrap();
+                        st.reap_stale(now)
+                    };
+                    if !evicted.is_empty() {
+                        let mut st = state_for_reap.lock().unwrap();
+                        for (cn, name) in evicted {
+                            st.push_log(format!("Agent stale-evicted: {cn}/{name}"));
+                        }
+                    }
+                }
+            });
+            reaper_started = true;
+        }
+
         // session_loop returns when the admitted list or peer set changes.
         if let Err(e) = session_loop(&session, Arc::clone(&state), peer_rx.clone()).await {
             state.lock().unwrap().push_log(format!("Session error: {e}"));
@@ -191,8 +225,13 @@ async fn acquire_or_reuse(
     }
 }
 
-/// Subscribe to node announce messages; auto-admit any node with a valid cert.
-/// Returns when the admitted list or peer set changes (triggering a session restart).
+/// Subscribe to node announce messages; auto-admit any node with a valid cert
+/// and feed the JSON payload into the agent inventory.  Returns when the
+/// admitted list or peer set changes (triggering a session restart).
+///
+/// Each announce key looks like `dverse/nodes/announce/<cn>/agents/<name>`
+/// which stays inside the existing `dverse/nodes/announce/**` ACL rule, so
+/// no ACL change is needed.
 async fn session_loop(
     session: &Session,
     state: Arc<Mutex<AppState>>,
@@ -206,26 +245,49 @@ async fn session_loop(
     // Mark current peer set as seen so the first .changed() fires only on a real change.
     peer_rx.borrow_and_update();
 
+    // Log-once-per-CN dedup for unparseable payloads (legacy plain-CN puts).
+    let mut seen_legacy: HashSet<String> = HashSet::new();
+
     loop {
         tokio::select! {
             msg = subscriber.recv_async() => {
                 match msg {
                     Ok(s) => {
-                        let key = s.key_expr().as_str().to_string();
-                        if key.starts_with("dverse/nodes/announce/") {
-                            let payload_cn = String::from_utf8_lossy(&s.payload().to_bytes()).into_owned();
-                            let cn = if payload_cn.trim().is_empty() {
-                                key.strip_prefix("dverse/nodes/announce/").unwrap_or("").to_string()
-                            } else {
-                                payload_cn.trim().to_string()
-                            };
-                            if cn.is_empty() { continue; }
-                            let mut st = state.lock().unwrap();
-                            if !st.admitted.contains(&cn) {
-                                st.admitted.push(cn.clone());
-                                st.push_log(format!("Auto-admitted CN: {cn}"));
-                                return Ok(());
+                        let bytes = s.payload().to_bytes();
+                        let ann: AgentAnnounce = match serde_json::from_slice(&bytes) {
+                            Ok(a) => a,
+                            Err(_) => {
+                                // Old / unparseable payload — log once per CN so a
+                                // stale agent on the network doesn't flood the log.
+                                let key = s.key_expr().as_str().to_string();
+                                let cn_for_log = key
+                                    .strip_prefix("dverse/nodes/announce/")
+                                    .and_then(|tail| tail.split('/').next())
+                                    .unwrap_or("?")
+                                    .to_string();
+                                if seen_legacy.insert(cn_for_log.clone()) {
+                                    state.lock().unwrap().push_log(format!(
+                                        "ignored unparseable announce from CN={cn_for_log}"
+                                    ));
+                                }
+                                continue;
                             }
+                        };
+
+                        let cn = ann.cn.clone();
+                        if cn.is_empty() { continue; }
+                        let now = Instant::now();
+                        let mut st = state.lock().unwrap();
+
+                        // 1. Agent inventory — never triggers restart.
+                        st.upsert_agent(&ann, now);
+
+                        // 2. Auto-admit — triggers restart so the new CN
+                        // lands in the rebuilt ACL.
+                        if !st.admitted.contains(&cn) {
+                            st.admitted.push(cn.clone());
+                            st.push_log(format!("Auto-admitted CN: {cn}"));
+                            return Ok(());
                         }
                     }
                     Err(e) => return Err(anyhow::anyhow!("subscriber recv: {e}")),
@@ -254,8 +316,7 @@ fn build_zenoh_config(
     zinsert(&mut cfg, "scouting/multicast/enabled", "false")?;
     zinsert(&mut cfg, "transport/link/tls/root_ca_certificate", &json_str(&ca_path.to_string_lossy()))?;
     zinsert(&mut cfg, "transport/link/tls/enable_mtls", "true")?;
-    zinsert(&mut cfg, "transport/link/tls/listen_certificate", &json_str(&cert_path.to_string_lossy()))?;
-    zinsert(&mut cfg, "transport/link/tls/listen_private_key", &json_str(&key_path.to_string_lossy()))?;
+    tls_identity(&mut cfg, cert_path, key_path)?;
     zinsert(&mut cfg, "access_control", &build_acl_json(admitted))?;
 
     if !peers.is_empty() {
@@ -336,4 +397,28 @@ fn json_str(s: &str) -> String {
 fn zinsert(cfg: &mut zenoh::Config, key: &str, value: &str) -> Result<()> {
     cfg.insert_json5(key, value)
         .map_err(|e| anyhow::anyhow!("zenoh config key '{}': {}", key, e))
+}
+
+/// Write the router's mTLS identity into both halves of Zenoh's TLS config in
+/// one call.  A router has exactly one identity, but the Zenoh config surface
+/// exposes it as two pairs (listener and connect side) that have to stay in
+/// sync by convention — wrapping the four writes in a single helper makes it
+/// structurally impossible to update one half and forget the other.
+fn tls_identity(
+    cfg: &mut zenoh::Config,
+    cert_path: &std::path::Path,
+    key_path: &std::path::Path,
+) -> Result<()> {
+    let cert = json_str(&cert_path.to_string_lossy());
+    let key = json_str(&key_path.to_string_lossy());
+    // Listener side: cert presented to peers dialling us.
+    zinsert(cfg, "transport/link/tls/listen_certificate", &cert)?;
+    zinsert(cfg, "transport/link/tls/listen_private_key", &key)?;
+    // Connect side: cert presented when we dial a peer router (peer routers
+    // run `enable_mtls=true` and require a valid client cert; without these
+    // the outgoing handshake stalls and inter-router forwarding never lights
+    // up — see ADR-017).
+    zinsert(cfg, "transport/link/tls/connect_certificate", &cert)?;
+    zinsert(cfg, "transport/link/tls/connect_private_key", &key)?;
+    Ok(())
 }
