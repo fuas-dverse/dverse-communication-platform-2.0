@@ -1,6 +1,7 @@
 mod constants;
 mod discovery;
 mod gui;
+mod logging;
 mod router;
 mod state;
 
@@ -32,6 +33,7 @@ fn run_normal() {
         Screen::Login(LoginForm::default())
     };
     let state = Arc::new(Mutex::new(AppState::new(existing_config)));
+    logging::init_with_gui_sink(Arc::clone(&state));
     let bg_state = Arc::clone(&state);
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -44,13 +46,39 @@ fn run_normal() {
 }
 
 fn run_demo() {
+    use std::collections::HashMap;
+    use std::time::Instant;
+    use state::{AgentInfo, AgentStatus, NodeInfo};
+
     let mut state = AppState::new(None);
     state.admitted = vec!["alice".into(), "mybot".into()];
     state.router_status = state::RouterStatus::Running;
-    state.push_log("[demo] Router started on tcp/0.0.0.0:7447");
-    state.push_log("[demo] Auto-admitted: alice");
-    state.push_log("[demo] Auto-admitted: mybot");
-    launch_gui(Arc::new(Mutex::new(state)), Screen::Main);
+    state.session_id = "alice".into();
+
+    let now = Instant::now();
+    let mut alice_agents = HashMap::new();
+    alice_agents.insert(
+        "ping".to_string(),
+        AgentInfo {
+            version: "0.1.0".into(),
+            publishes: vec!["dverse/ping".into()],
+            subscribes: vec!["dverse/pong".into()],
+            status: AgentStatus::Online,
+            last_seen: now,
+        },
+    );
+    state.connected_nodes.insert(
+        "alice".into(),
+        NodeInfo { cn: "alice".into(), last_seen: now, agents: alice_agents },
+    );
+
+    let state = Arc::new(Mutex::new(state));
+    logging::init_with_gui_sink(Arc::clone(&state));
+    tracing::info!("[demo] router started on tcp/0.0.0.0:7447");
+    tracing::info!("[demo] session admin: alice");
+    tracing::info!("[demo] auto-admitted alice");
+    tracing::info!("[demo] auto-admitted mybot");
+    launch_gui(state, Screen::Main);
 }
 
 fn launch_gui(state: Arc<Mutex<AppState>>, screen: Screen) {

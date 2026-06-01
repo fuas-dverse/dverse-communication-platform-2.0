@@ -20,6 +20,25 @@ rcgen = "0.13"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["full"] }
-zenoh = "1.8.0"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "sync",
+    "net",
+    "fs",
+    "io-util",
+] }
+# Matches the router's transport set — TCP+TLS only.
+zenoh = { version = "1.8.0", default-features = false, features = [
+    "auth_pubkey",
+    "auth_usrpwd",
+    "transport_compression",
+    "transport_multilink",
+    "transport_tcp",
+    "transport_tls",
+] }
 keyring = { version = "3", features = ["sync-secret-service", "apple-native", "windows-native"] }
+x509-parser = "0.18"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

@@ -14,11 +14,36 @@ clap = { version = "4", features = ["derive"] }
 dirs = "5"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 serde_json = "1"
-eframe = "0.31"
+# eframe default features include `accesskit` which pulls in zbus +
+# accesskit_unix + dbus (~2 MB of binary, screen-reader integration we don't
+# use).  Re-enable the rendering / font / windowing bits we actually need.
+eframe = { version = "0.31", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "wayland",
+    "x11",
+] }
 egui = "0.31"
-tokio = { version = "1", features = ["full"] }
-zenoh = "1.8.0"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "sync",
+    "net",
+    "fs",
+    "io-util",
+] }
+# We only ever speak TCP+TLS to peers. Drop QUIC, UDP, WebSockets,
+# Unix sockets, and serial — that's ~1 MB of dead code per binary.
+zenoh = { version = "1.8.0", default-features = false, features = [
+    "auth_pubkey",
+    "auth_usrpwd",
+    "transport_compression",
+    "transport_multilink",
+    "transport_tcp",
+    "transport_tls",
+] }
 mdns-sd = "0.13"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-zbus = { version = "4", default-features = false, features = ["blocking"] }
+if-addrs = "0.13"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
