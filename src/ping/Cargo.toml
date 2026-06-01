@@ -10,6 +10,18 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 bot-framework = { path = "../bot_framework" }
-tokio = { version = "1", features = ["full"] }
-zenoh = "1.8.0"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "sync",
+] }
+zenoh = { version = "1.8.0", default-features = false, features = [
+    "auth_pubkey",
+    "auth_usrpwd",
+    "transport_compression",
+    "transport_multilink",
+    "transport_tcp",
+    "transport_tls",
+] }
 tracing = "0.1"
