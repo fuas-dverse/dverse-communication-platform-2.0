@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::Result;
 use bot_framework::cert;
 use bot_framework::config::DverseConfig;
+use tokio::sync::watch;
 use zenoh::Session;
 
 use crate::discovery::MdnsHandle;
@@ -18,6 +19,8 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
     let mut current_cfg: Option<DverseConfig> = None;
     // Kept alive for the entire router lifetime; dropped (→ mDNS record withdrawn) on exit.
     let mut _mdns: Option<MdnsHandle> = None;
+    // Carries the current set of discovered peer endpoints; starts empty.
+    let (_, mut peer_rx): (_, watch::Receiver<Vec<String>>) = watch::channel(vec![]);
 
     loop {
         // ── Phase 1: obtain config ───────────────────────────────────────────
@@ -35,9 +38,16 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
                 tokio::time::sleep(Duration::from_millis(200)).await;
             };
 
-            // Publish DNS-SD service record once, the first time we get a config.
+            // Publish DNS-SD service record and start peer browsing once, on first config.
             if _mdns.is_none() {
-                _mdns = MdnsHandle::publish(&cfg.operator_cn(), crate::constants::ROUTER_PORT, &state);
+                if let Some(handle) = MdnsHandle::publish(
+                    &cfg.operator_cn(),
+                    crate::constants::ROUTER_PORT,
+                    &state,
+                ) {
+                    peer_rx = handle.peer_rx.clone();
+                    _mdns = Some(handle);
+                }
             }
 
             cfg
@@ -87,9 +97,10 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
             }
         };
 
-        // ── Phase 3: run session loop (restarts on ACL change) ───────────────
+        // ── Phase 3: run session loop (restarts on ACL or peer change) ──────
         let admitted = state.lock().unwrap().admitted.clone();
-        let config = match build_zenoh_config(&cfg.router_listen, &ca_p, &cert_p, &key_p, &admitted) {
+        let peers = peer_rx.borrow().clone();
+        let config = match build_zenoh_config(&cfg.router_listen, &ca_p, &cert_p, &key_p, &admitted, &peers) {
             Ok(c) => c,
             Err(e) => {
                 let mut s = state.lock().unwrap();
@@ -125,8 +136,8 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
             s.push_log("Router running.");
         }
 
-        // session_loop returns when the admitted list changes.
-        if let Err(e) = session_loop(&session, Arc::clone(&state)).await {
+        // session_loop returns when the admitted list or peer set changes.
+        if let Err(e) = session_loop(&session, Arc::clone(&state), peer_rx.clone()).await {
             state.lock().unwrap().push_log(format!("Session error: {e}"));
         }
 
@@ -160,36 +171,49 @@ async fn acquire_or_reuse(
 }
 
 /// Subscribe to node announce messages; auto-admit any node with a valid cert.
-/// Returns when the admitted list changes (triggering an ACL session restart).
-async fn session_loop(session: &Session, state: Arc<Mutex<AppState>>) -> Result<()> {
+/// Returns when the admitted list or peer set changes (triggering a session restart).
+async fn session_loop(
+    session: &Session,
+    state: Arc<Mutex<AppState>>,
+    mut peer_rx: watch::Receiver<Vec<String>>,
+) -> Result<()> {
     let subscriber = session
         .declare_subscriber("dverse/nodes/announce/**")
         .await
         .map_err(|e| anyhow::anyhow!("declare_subscriber: {e}"))?;
 
+    // Mark current peer set as seen so the first .changed() fires only on a real change.
+    peer_rx.borrow_and_update();
+
     loop {
-        match subscriber.recv_async().await {
-            Ok(s) => {
-                let key = s.key_expr().as_str().to_string();
-                if key.starts_with("dverse/nodes/announce/") {
-                    // CN is sent as payload; fall back to key segment if empty.
-                    let payload_cn = String::from_utf8_lossy(&s.payload().to_bytes()).into_owned();
-                    let cn = if payload_cn.trim().is_empty() {
-                        key.strip_prefix("dverse/nodes/announce/").unwrap_or("").to_string()
-                    } else {
-                        payload_cn.trim().to_string()
-                    };
-                    if cn.is_empty() { continue; }
-                    let mut st = state.lock().unwrap();
-                    if !st.admitted.contains(&cn) {
-                        st.admitted.push(cn.clone());
-                        st.push_log(format!("Auto-admitted CN: {cn}"));
-                        // Signal the outer loop to restart the session with new ACL.
-                        return Ok(());
+        tokio::select! {
+            msg = subscriber.recv_async() => {
+                match msg {
+                    Ok(s) => {
+                        let key = s.key_expr().as_str().to_string();
+                        if key.starts_with("dverse/nodes/announce/") {
+                            let payload_cn = String::from_utf8_lossy(&s.payload().to_bytes()).into_owned();
+                            let cn = if payload_cn.trim().is_empty() {
+                                key.strip_prefix("dverse/nodes/announce/").unwrap_or("").to_string()
+                            } else {
+                                payload_cn.trim().to_string()
+                            };
+                            if cn.is_empty() { continue; }
+                            let mut st = state.lock().unwrap();
+                            if !st.admitted.contains(&cn) {
+                                st.admitted.push(cn.clone());
+                                st.push_log(format!("Auto-admitted CN: {cn}"));
+                                return Ok(());
+                            }
+                        }
                     }
+                    Err(e) => return Err(anyhow::anyhow!("subscriber recv: {e}")),
                 }
             }
-            Err(e) => return Err(anyhow::anyhow!("subscriber recv: {e}")),
+            Ok(()) = peer_rx.changed() => {
+                state.lock().unwrap().push_log("Peer set changed, reloading router…");
+                return Ok(());
+            }
         }
     }
 }
@@ -200,6 +224,7 @@ fn build_zenoh_config(
     cert_path: &std::path::Path,
     key_path: &std::path::Path,
     admitted: &[String],
+    peers: &[String],
 ) -> Result<zenoh::Config> {
     let mut cfg = zenoh::Config::default();
 
@@ -211,6 +236,14 @@ fn build_zenoh_config(
     zinsert(&mut cfg, "transport/link/tls/listen_certificate", &json_str(&cert_path.to_string_lossy()))?;
     zinsert(&mut cfg, "transport/link/tls/listen_private_key", &json_str(&key_path.to_string_lossy()))?;
     zinsert(&mut cfg, "access_control", &build_acl_json(admitted))?;
+
+    if !peers.is_empty() {
+        let endpoints_json = serde_json::to_string(peers).unwrap();
+        zinsert(&mut cfg, "connect/endpoints", &endpoints_json)?;
+        // Peer endpoints are IPs from DNS-SD; skip SNI hostname check.
+        // mTLS CA verification is still enforced on both sides.
+        zinsert(&mut cfg, "transport/link/tls/verify_name_on_connect", "false")?;
+    }
 
     Ok(cfg)
 }
