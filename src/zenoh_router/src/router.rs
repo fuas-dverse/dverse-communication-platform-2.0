@@ -254,14 +254,7 @@ fn build_zenoh_config(
     zinsert(&mut cfg, "scouting/multicast/enabled", "false")?;
     zinsert(&mut cfg, "transport/link/tls/root_ca_certificate", &json_str(&ca_path.to_string_lossy()))?;
     zinsert(&mut cfg, "transport/link/tls/enable_mtls", "true")?;
-    zinsert(&mut cfg, "transport/link/tls/listen_certificate", &json_str(&cert_path.to_string_lossy()))?;
-    zinsert(&mut cfg, "transport/link/tls/listen_private_key", &json_str(&key_path.to_string_lossy()))?;
-    // The router presents the same cert as a client when it dials a peer
-    // router's listener — peer routers run `enable_mtls=true` and require a
-    // valid client cert, so without these two keys the outgoing handshake
-    // stalls and inter-router forwarding never lights up.
-    zinsert(&mut cfg, "transport/link/tls/connect_certificate", &json_str(&cert_path.to_string_lossy()))?;
-    zinsert(&mut cfg, "transport/link/tls/connect_private_key", &json_str(&key_path.to_string_lossy()))?;
+    tls_identity(&mut cfg, cert_path, key_path)?;
     zinsert(&mut cfg, "access_control", &build_acl_json(admitted))?;
 
     if !peers.is_empty() {
@@ -342,4 +335,28 @@ fn json_str(s: &str) -> String {
 fn zinsert(cfg: &mut zenoh::Config, key: &str, value: &str) -> Result<()> {
     cfg.insert_json5(key, value)
         .map_err(|e| anyhow::anyhow!("zenoh config key '{}': {}", key, e))
+}
+
+/// Write the router's mTLS identity into both halves of Zenoh's TLS config in
+/// one call.  A router has exactly one identity, but the Zenoh config surface
+/// exposes it as two pairs (listener and connect side) that have to stay in
+/// sync by convention — wrapping the four writes in a single helper makes it
+/// structurally impossible to update one half and forget the other.
+fn tls_identity(
+    cfg: &mut zenoh::Config,
+    cert_path: &std::path::Path,
+    key_path: &std::path::Path,
+) -> Result<()> {
+    let cert = json_str(&cert_path.to_string_lossy());
+    let key = json_str(&key_path.to_string_lossy());
+    // Listener side: cert presented to peers dialling us.
+    zinsert(cfg, "transport/link/tls/listen_certificate", &cert)?;
+    zinsert(cfg, "transport/link/tls/listen_private_key", &key)?;
+    // Connect side: cert presented when we dial a peer router (peer routers
+    // run `enable_mtls=true` and require a valid client cert; without these
+    // the outgoing handshake stalls and inter-router forwarding never lights
+    // up — see ADR-017).
+    zinsert(cfg, "transport/link/tls/connect_certificate", &cert)?;
+    zinsert(cfg, "transport/link/tls/connect_private_key", &key)?;
+    Ok(())
 }
