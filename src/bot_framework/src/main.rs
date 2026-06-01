@@ -81,6 +81,7 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    bot_framework::logging::init();
     let cli = Cli::parse();
 
     match cli.command {
@@ -119,7 +120,7 @@ async fn main() -> Result<()> {
 
         Command::CheckCert { node_name, cert_dir, max_age_hours } => {
             let crt = cert::cert_path(&cert_dir, &node_name);
-            let stale = cert::needs_renewal(&crt, Duration::from_secs(max_age_hours * 3600)).await;
+            let stale = cert::needs_renewal(&crt, Duration::from_secs(max_age_hours * 3600), None).await;
             if stale {
                 eprintln!("Certificate {} needs renewal.", crt.display());
                 std::process::exit(1);

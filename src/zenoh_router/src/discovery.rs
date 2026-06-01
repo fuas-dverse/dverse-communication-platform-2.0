@@ -1,164 +1,59 @@
-use mdns_sd::{ServiceDaemon, ServiceInfo};
-use std::sync::{Arc, Mutex};
+//! DNS-SD peer discovery for the Zenoh router.
+//!
+//! Public entry point: [`MdnsHandle::publish`].  Drop the handle to withdraw
+//! the service record and stop browsing.
+//!
+//! Internals are split across three sibling modules:
+//!   * [`common`]     — shared constants, format helpers, IP detection,
+//!                      mdns-sd daemon setup, peer registry.
+//!   * [`announcing`] — registers our service.
+//!   * [`browsing`]   — watches for other services and tracks endpoints.
 
-use crate::state::AppState;
+mod announcing;
+mod browsing;
+mod common;
 
-const SERVICE_TYPE: &str = "_dverse._tcp.local.";
+use mdns_sd::ServiceDaemon;
+use tokio::sync::watch;
+use tracing::info;
 
-/// Registers this router as a `_dverse._tcp` DNS-SD service.
-///
-/// On Linux: uses the avahi D-Bus API so avahi-daemon owns the mDNS socket.
-/// Falls back to mdns-sd if avahi is absent, or on non-Linux platforms.
-///
-/// The record is withdrawn when this handle is dropped.
+use self::common::create_filtered_daemon;
+
+/// Discovery handle.  Holds the mdns-sd daemon alive and exposes a `peer_rx`
+/// watch channel listing the current peer endpoints as `tls/<ip>:<port>`
+/// strings, ready for Zenoh's `connect/endpoints`.
 pub struct MdnsHandle {
-    _inner: Inner,
-}
-
-enum Inner {
-    #[cfg(target_os = "linux")]
-    Avahi(AvahiHandle),
-    MdnsSd(MdnsSdHandle),
+    _inner: MdnsSdSession,
+    pub peer_rx: watch::Receiver<Vec<String>>,
 }
 
 impl MdnsHandle {
-    pub fn publish(cn: &str, port: u16, state: &Arc<Mutex<AppState>>) -> Option<Self> {
-        #[cfg(target_os = "linux")]
-        {
-            match linux::publish(cn, port) {
-                Ok(handle) => {
-                    state.lock().unwrap().push_log(format!(
-                        "mDNS: published DVerse ({cn}) on {SERVICE_TYPE} port {port} (via avahi)"
-                    ));
-                    return Some(Self { _inner: Inner::Avahi(handle) });
-                }
-                Err(e) => {
-                    state.lock().unwrap().push_log(format!(
-                        "Warning: avahi D-Bus unavailable ({e}); falling back to mdns-sd"
-                    ));
-                }
-            }
-        }
-
-        mdns_sd_publish(cn, port, state).map(|h| Self { _inner: Inner::MdnsSd(h) })
+    pub fn publish(cn: &str, session_id: &str, port: u16) -> Option<Self> {
+        info!("mDNS: using mdns-sd backend");
+        mdns_sd_start(cn, session_id, port)
     }
 }
 
-// ── Linux: avahi D-Bus ────────────────────────────────────────────────────────
-
-#[cfg(target_os = "linux")]
-struct AvahiHandle {
-    // Keeping the connection alive: avahi-daemon removes services automatically
-    // when the owning D-Bus connection closes.
-    _conn: zbus::blocking::Connection,
-}
-
-#[cfg(target_os = "linux")]
-mod linux {
-    use super::AvahiHandle;
-    use anyhow::Result;
-    use zbus::blocking::Connection;
-
-    pub fn publish(cn: &str, port: u16) -> Result<AvahiHandle> {
-        let conn = Connection::system()?;
-
-        let group_path: zbus::zvariant::OwnedObjectPath = conn
-            .call_method(
-                Some("org.freedesktop.Avahi"),
-                "/",
-                Some("org.freedesktop.Avahi.Server"),
-                "EntryGroupNew",
-                &(),
-            )?
-            .body()
-            .deserialize()?;
-
-        // AddService(interface, protocol, flags, name, type, domain, host, port, txt)
-        // interface=-1 (AVAHI_IF_UNSPEC), protocol=-1 (AVAHI_PROTO_UNSPEC)
-        let name = format!("DVerse ({cn})");
-        let txt: Vec<Vec<u8>> = vec![format!("cn={cn}").into_bytes()];
-
-        conn.call_method(
-            Some("org.freedesktop.Avahi"),
-            group_path.as_str(),
-            Some("org.freedesktop.Avahi.EntryGroup"),
-            "AddService",
-            &(
-                -1i32,
-                -1i32,
-                0u32,
-                name.as_str(),
-                "_dverse._tcp",
-                "",
-                "",
-                port,
-                &txt,
-            ),
-        )?;
-
-        conn.call_method(
-            Some("org.freedesktop.Avahi"),
-            group_path.as_str(),
-            Some("org.freedesktop.Avahi.EntryGroup"),
-            "Commit",
-            &(),
-        )?;
-
-        Ok(AvahiHandle { _conn: conn })
-    }
-}
-
-// ── mdns-sd (non-Linux or avahi-absent fallback) ──────────────────────────────
-
-struct MdnsSdHandle {
+/// Owns the mdns-sd daemon + the registered service fullname so we can
+/// unregister cleanly on drop.
+struct MdnsSdSession {
     daemon: ServiceDaemon,
     fullname: String,
 }
 
-impl Drop for MdnsSdHandle {
+impl Drop for MdnsSdSession {
     fn drop(&mut self) {
         let _ = self.daemon.unregister(&self.fullname);
         let _ = self.daemon.shutdown();
     }
 }
 
-fn mdns_sd_publish(cn: &str, port: u16, state: &Arc<Mutex<AppState>>) -> Option<MdnsSdHandle> {
-    let daemon = match ServiceDaemon::new() {
-        Ok(d) => d,
-        Err(e) => {
-            state.lock().unwrap().push_log(format!(
-                "Warning: mDNS unavailable ({e}); peer discovery disabled"
-            ));
-            return None;
-        }
-    };
-
-    let instance = format!("DVerse ({cn})");
-    let host = format!("zenoh-{cn}.local.");
-    let props: &[(&str, &str)] = &[("cn", cn)];
-
-    let svc = match ServiceInfo::new(SERVICE_TYPE, &instance, &host, (), port, props) {
-        Ok(s) => s,
-        Err(e) => {
-            state.lock().unwrap().push_log(format!(
-                "Warning: mDNS service info error ({e}); peer discovery disabled"
-            ));
-            return None;
-        }
-    };
-
-    let fullname = svc.get_fullname().to_string();
-
-    if let Err(e) = daemon.register(svc) {
-        state.lock().unwrap().push_log(format!(
-            "Warning: mDNS register failed ({e}); peer discovery disabled"
-        ));
-        return None;
-    }
-
-    state.lock().unwrap().push_log(format!(
-        "mDNS: published {instance} on {SERVICE_TYPE} port {port}"
-    ));
-
-    Some(MdnsSdHandle { daemon, fullname })
+fn mdns_sd_start(cn: &str, session_id: &str, port: u16) -> Option<MdnsHandle> {
+    let daemon = create_filtered_daemon()?;
+    let fullname = announcing::mdns_sd_register(&daemon, cn, session_id, port)?;
+    let peer_rx = browsing::mdns_sd_start(&daemon, cn, session_id)?;
+    Some(MdnsHandle {
+        _inner: MdnsSdSession { daemon, fullname },
+        peer_rx,
+    })
 }

@@ -1,11 +1,11 @@
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
-use bot_framework::config::DverseConfig;
+use bot_framework::config::{DverseConfig, SessionRole};
 
 use crate::constants::{CA_URL, CLIENT_ID, CLIENT_SECRET, KEYCLOAK_REALM, KEYCLOAK_URL, REGISTRATION_CLIENT_ID, REGISTRATION_CLIENT_SECRET, ROUTER_LISTEN, ROUTER_PORT};
-use crate::state::{AppState, RouterStatus};
+use crate::state::{AgentStatus, AppState, RouterStatus};
 
 // ── Screen state (GUI thread only) ─────────────────────────────────────────────
 
@@ -20,11 +20,22 @@ pub struct LoginForm {
     pub username: String,
     pub password: String,
     pub error: Option<String>,
+    /// Radio: true = create a new session (this user becomes admin),
+    /// false = join an existing session whose admin's CN is `join_admin_cn`.
+    pub create_session: bool,
+    /// Admin CN to join when `create_session == false`.
+    pub join_admin_cn: String,
 }
 
 impl Default for LoginForm {
     fn default() -> Self {
-        Self { username: String::new(), password: String::new(), error: None }
+        Self {
+            username: String::new(),
+            password: String::new(),
+            error: None,
+            create_session: true,
+            join_admin_cn: String::new(),
+        }
     }
 }
 
@@ -147,6 +158,29 @@ fn show_login(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>, form: &mut 
                     }
                 });
 
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            // Session role selector: create your own session, or join an
+            // existing one whose admin's CN you know.
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut form.create_session, true, "Create new session");
+                ui.add_space(12.0);
+                ui.radio_value(&mut form.create_session, false, "Join session");
+            });
+            if !form.create_session {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Admin username");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut form.join_admin_cn)
+                            .hint_text("e.g. alice")
+                            .min_size(egui::vec2(220.0, 0.0)),
+                    );
+                });
+            }
+
             ui.add_space(16.0);
 
             if let Some(err) = &form.error {
@@ -192,6 +226,19 @@ fn try_login(form: &mut LoginForm, state: &Arc<Mutex<AppState>>) {
         return;
     }
 
+    // Build session role from the radio + admin CN field.  When joining,
+    // the admin CN is required and must be non-empty.
+    let session_role = if form.create_session {
+        SessionRole::Admin
+    } else {
+        let admin_cn = form.join_admin_cn.trim().to_string();
+        if admin_cn.is_empty() {
+            form.error = Some("Admin username is required to join a session.".into());
+            return;
+        }
+        SessionRole::Client { admin_cn }
+    };
+
     let cert_dir = dirs::data_local_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("dverse")
@@ -214,6 +261,7 @@ fn try_login(form: &mut LoginForm, state: &Arc<Mutex<AppState>>) {
         cert_dir,
         router_listen: ROUTER_LISTEN.into(),
         router_endpoint,
+        session_role,
     };
 
     if let Err(e) = cfg.save() {
@@ -221,9 +269,12 @@ fn try_login(form: &mut LoginForm, state: &Arc<Mutex<AppState>>) {
         return;
     }
 
-    let mut st = state.lock().unwrap();
-    st.push_log(format!("Signed in as {}. Bootstrapping…", cfg.username));
-    st.staged_config = Some(cfg);
+    let username = cfg.username.clone();
+    {
+        let mut st = state.lock().unwrap();
+        st.staged_config = Some(cfg);
+    }
+    tracing::info!(username = %username, "signed in, bootstrapping");
     form.error = None;
 }
 
@@ -445,6 +496,34 @@ fn show_loading(ctx: &egui::Context, state: &Arc<Mutex<AppState>>) {
 fn show_main(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>) {
     let st = state.lock().unwrap();
 
+    // Session badge — declared first so it renders above status_bar.  egui's
+    // top panels stack in declaration order.
+    //
+    // Hidden entirely until a config has been accepted (signalled by a
+    // non-empty `session_id`).  Otherwise the Admin variant would render
+    // `Admin · ` with an empty CN during the Idle / Acquiring states.
+    if !st.session_id.is_empty() {
+        egui::TopBottomPanel::top("session_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Session:");
+                match &st.session_role {
+                    SessionRole::Admin => {
+                        ui.colored_label(
+                            egui::Color32::LIGHT_BLUE,
+                            format!("Admin · {}", st.session_id),
+                        );
+                    }
+                    SessionRole::Client { admin_cn } => {
+                        ui.colored_label(
+                            egui::Color32::LIGHT_GREEN,
+                            format!("Joined · admin: {admin_cn}"),
+                        );
+                    }
+                }
+            });
+        });
+    }
+
     egui::TopBottomPanel::top("status_bar").show(ctx, |ui| {
         ui.horizontal(|ui| {
             ui.label("Router:");
@@ -476,15 +555,67 @@ fn show_main(ctx: &egui::Context, state: &mut Arc<Mutex<AppState>>) {
     egui::CentralPanel::default().show(ctx, |ui| {
         ui.heading("Connected nodes");
         ui.add_space(6.0);
-        if st.admitted.is_empty() {
+        if st.connected_nodes.is_empty() {
             ui.weak("Waiting for nodes to connect…");
         } else {
-            for cn in &st.admitted {
-                ui.horizontal(|ui| {
-                    ui.colored_label(egui::Color32::GREEN, "●");
-                    ui.label(cn);
-                });
-            }
+            let now = Instant::now();
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                // Sort CNs alphabetically for a stable display order between
+                // repaints; egui repaints frequently and HashMap iteration
+                // order would otherwise jitter.
+                let mut cns: Vec<&String> = st.connected_nodes.keys().collect();
+                cns.sort();
+                for cn in cns {
+                    let node = &st.connected_nodes[cn];
+                    egui::CollapsingHeader::new(cn)
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            if node.agents.is_empty() {
+                                ui.weak("(no agents reported)");
+                                return;
+                            }
+                            let mut agent_names: Vec<&String> = node.agents.keys().collect();
+                            agent_names.sort();
+                            for name in agent_names {
+                                let ag = &node.agents[name];
+                                ui.horizontal(|ui| {
+                                    match ag.status {
+                                        AgentStatus::Online => {
+                                            ui.colored_label(egui::Color32::GREEN, "●");
+                                        }
+                                        AgentStatus::Degraded => {
+                                            ui.colored_label(egui::Color32::YELLOW, "●");
+                                        }
+                                        AgentStatus::Offline => {
+                                            ui.colored_label(egui::Color32::GRAY, "●");
+                                        }
+                                    }
+                                    ui.monospace(name);
+                                    ui.weak(format!("v{}", ag.version));
+                                    ui.weak("·");
+                                    ui.weak(format_ago(now.saturating_duration_since(ag.last_seen)));
+                                });
+                                if !ag.publishes.is_empty() || !ag.subscribes.is_empty() {
+                                    ui.indent(format!("ke_{cn}_{name}"), |ui| {
+                                        if !ag.publishes.is_empty() {
+                                            ui.weak("Publishes");
+                                            for ke in &ag.publishes {
+                                                ui.monospace(format!("  → {ke}"));
+                                            }
+                                        }
+                                        if !ag.subscribes.is_empty() {
+                                            ui.weak("Subscribes");
+                                            for ke in &ag.subscribes {
+                                                ui.monospace(format!("  ← {ke}"));
+                                            }
+                                        }
+                                    });
+                                }
+                                ui.add_space(2.0);
+                            }
+                        });
+                }
+            });
         }
     });
 }
@@ -495,5 +626,17 @@ fn info_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.weak(label);
     ui.weak(value);
     ui.end_row();
+}
+
+/// Render a duration as a human-friendly "Ns ago" / "Nm Ms ago" string.
+fn format_ago(d: Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m {}s ago", secs / 60, secs % 60)
+    } else {
+        format!("{}h {}m ago", secs / 3600, (secs % 3600) / 60)
+    }
 }
 
