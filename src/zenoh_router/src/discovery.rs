@@ -25,6 +25,8 @@ use self::common::create_filtered_daemon;
 pub struct MdnsHandle {
     _inner: MdnsSdSession,
     pub peer_rx: watch::Receiver<Vec<String>>,
+    /// Admin CNs of sessions visible on the LAN (for the session chooser).
+    pub sessions_rx: watch::Receiver<Vec<String>>,
 }
 
 impl MdnsHandle {
@@ -51,9 +53,10 @@ impl Drop for MdnsSdSession {
 fn mdns_sd_start(cn: &str, session_id: &str, port: u16) -> Option<MdnsHandle> {
     let daemon = create_filtered_daemon()?;
     let fullname = announcing::mdns_sd_register(&daemon, cn, session_id, port)?;
-    let peer_rx = browsing::mdns_sd_start(&daemon, cn, session_id)?;
+    let (peer_rx, sessions_rx) = browsing::mdns_sd_start(&daemon, cn, session_id)?;
     Some(MdnsHandle {
         _inner: MdnsSdSession { daemon, fullname },
         peer_rx,
+        sessions_rx,
     })
 }

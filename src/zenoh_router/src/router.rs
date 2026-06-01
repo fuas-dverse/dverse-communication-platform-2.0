@@ -64,6 +64,21 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
                     crate::constants::ROUTER_PORT,
                 ) {
                     peer_rx = handle.peer_rx.clone();
+                    // Mirror the visible-sessions list into AppState continuously
+                    // (independent of session restarts) so the chooser stays fresh.
+                    let vis_state = Arc::clone(&state);
+                    let mut vis_rx = handle.sessions_rx.clone();
+                    tokio::spawn(async move {
+                        loop {
+                            {
+                                let v = vis_rx.borrow_and_update().clone();
+                                vis_state.lock().unwrap().visible_sessions = v;
+                            }
+                            if vis_rx.changed().await.is_err() {
+                                break;
+                            }
+                        }
+                    });
                     _mdns = Some(handle);
                 }
             }

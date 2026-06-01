@@ -25,6 +25,9 @@ pub struct AppState {
     /// from `dverse/nodes/announce/<cn>/agents/<name>` heartbeats and pruned
     /// by the stale-eviction task.
     pub connected_nodes: HashMap<String, NodeInfo>,
+    /// Admin CNs of sessions visible on the LAN, mirrored from DNS-SD browsing.
+    /// Drives the session chooser; independent of which session we're in.
+    pub visible_sessions: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,6 +105,7 @@ impl AppState {
             session_role,
             session_id,
             connected_nodes: HashMap::new(),
+            visible_sessions: Vec::new(),
         }
     }
 
