@@ -31,10 +31,15 @@ pub struct AgentAnnounce {
     pub agent_name: String,
     /// Agent's `CARGO_PKG_VERSION`.
     pub version: String,
-    /// Zenoh key expressions the agent uses — typically the topics it
-    /// publishes to plus those it subscribes from.  Surfaced in the router
-    /// GUI so a user can see "who provides what".
-    pub key_exprs: Vec<String>,
+    /// Zenoh key expressions the agent **publishes on** (i.e. calls
+    /// `session.put(key, ...)` for).  Rendered with a `→` arrow in the
+    /// router GUI so a user can see this agent as a source of those keys.
+    pub publishes: Vec<String>,
+    /// Zenoh key expressions the agent **subscribes from** (i.e. calls
+    /// `session.declare_subscriber(key)` for).  Rendered with a `←` arrow
+    /// in the router GUI so a user can see this agent as a consumer of
+    /// those keys.
+    pub subscribes: Vec<String>,
     /// Self-reported status.  Authoritative status is computed router-side
     /// from `last_seen`; agents only ever report `Online`.
     pub status: AgentStatusWire,
@@ -61,7 +66,10 @@ pub struct AgentInfo<'a> {
     pub cn: &'a str,
     pub agent_name: &'a str,
     pub version: &'a str,
-    pub key_exprs: Vec<String>,
+    /// Zenoh key expressions this agent publishes on.
+    pub publishes: Vec<String>,
+    /// Zenoh key expressions this agent subscribes from.
+    pub subscribes: Vec<String>,
 }
 
 /// Handle for an in-progress announcer.  Drop to stop the heartbeat —
@@ -83,7 +91,8 @@ impl AgentAnnouncer {
             cn: info.cn.to_string(),
             agent_name: info.agent_name.to_string(),
             version: info.version.to_string(),
-            key_exprs: info.key_exprs.clone(),
+            publishes: info.publishes.clone(),
+            subscribes: info.subscribes.clone(),
             status: AgentStatusWire::Online,
             announced_at: None,
         };

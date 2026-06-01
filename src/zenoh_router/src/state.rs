@@ -54,7 +54,12 @@ pub struct NodeInfo {
 #[derive(Debug, Clone)]
 pub struct AgentInfo {
     pub version: String,
-    pub key_expressions: Vec<String>,
+    /// Zenoh key expressions this agent publishes on (`session.put`).
+    /// Rendered with a `→` arrow in the GUI tree.
+    pub publishes: Vec<String>,
+    /// Zenoh key expressions this agent subscribes from
+    /// (`session.declare_subscriber`).  Rendered with a `←` arrow in the GUI.
+    pub subscribes: Vec<String>,
     pub status: AgentStatus,
     pub last_seen: Instant,
 }
@@ -129,7 +134,8 @@ impl AppState {
             ann.agent_name.clone(),
             AgentInfo {
                 version: ann.version.clone(),
-                key_expressions: ann.key_exprs.clone(),
+                publishes: ann.publishes.clone(),
+                subscribes: ann.subscribes.clone(),
                 status: AgentStatus::Online,
                 last_seen: now,
             },

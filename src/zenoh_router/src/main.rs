@@ -61,7 +61,8 @@ fn run_demo() {
         "ping".to_string(),
         AgentInfo {
             version: "0.1.0".into(),
-            key_expressions: vec!["dverse/ping".into(), "dverse/pong".into()],
+            publishes: vec!["dverse/ping".into()],
+            subscribes: vec!["dverse/pong".into()],
             status: AgentStatus::Online,
             last_seen: now,
         },
