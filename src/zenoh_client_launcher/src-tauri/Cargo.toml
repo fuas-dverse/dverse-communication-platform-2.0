@@ -30,6 +30,9 @@ mdns-sd = "0.13"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 anyhow = "1"
 bot-framework = { path = "../../bot_framework" }
+# Embed the real router in-process (mode=router, discovery, ACL, agent
+# inventory). default-features=false keeps eframe/egui out of this build.
+zenoh-router = { path = "../../zenoh_router", default-features = false }
 zenoh = { version = "1.8.0", default-features = false, features = [
     "transport_tcp",
     "transport_tls",

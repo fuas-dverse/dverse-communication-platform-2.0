@@ -1,16 +1,10 @@
-mod constants;
-mod discovery;
-mod gui;
-mod logging;
-mod router;
-mod state;
-
 use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use bot_framework::config::DverseConfig;
-use gui::{LoginForm, RouterApp, Screen};
-use state::AppState;
+use zenoh_router::gui::{LoginForm, RouterApp, Screen};
+use zenoh_router::state::AppState;
+use zenoh_router::{logging, router};
 
 #[derive(Parser)]
 #[command(name = "zenoh-router", about = "dverse Zenoh router with admission GUI")]
@@ -48,11 +42,11 @@ fn run_normal() {
 fn run_demo() {
     use std::collections::HashMap;
     use std::time::Instant;
-    use state::{AgentInfo, AgentStatus, NodeInfo};
+    use zenoh_router::state::{AgentInfo, AgentStatus, NodeInfo, RouterStatus};
 
     let mut state = AppState::new(None);
     state.admitted = vec!["alice".into(), "mybot".into()];
-    state.router_status = state::RouterStatus::Running;
+    state.router_status = RouterStatus::Running;
     state.session_id = "alice".into();
 
     let now = Instant::now();

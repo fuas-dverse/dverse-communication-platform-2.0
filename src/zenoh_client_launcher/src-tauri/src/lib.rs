@@ -7,6 +7,10 @@ use bot_framework::config::{DverseConfig, SessionRole};
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 use serde::{Deserialize, Serialize};
 use tauri::State;
+use tracing::{error, info, warn};
+// The embedded router's state is the source of truth for status / session /
+// connected-nodes / log. The Tauri layer only adds GUI screen routing.
+use zenoh_router::state as zr;
 
 // ── Constants (mirrored from zenoh_router) ────────────────────────────────────
 
@@ -96,100 +100,103 @@ pub struct AppSnapshot {
     pub error: Option<String>,
 }
 
+// ── Status mappers (library types → serde DTOs) ───────────────────────────────
+
+fn map_router_status(s: &zr::RouterStatus) -> RouterStatus {
+    match s {
+        zr::RouterStatus::Idle => RouterStatus::Idle,
+        zr::RouterStatus::Acquiring => RouterStatus::Acquiring,
+        zr::RouterStatus::Starting => RouterStatus::Starting,
+        zr::RouterStatus::Running => RouterStatus::Running,
+        zr::RouterStatus::Reloading => RouterStatus::Reloading,
+        zr::RouterStatus::Error(e) => RouterStatus::Error(e.clone()),
+    }
+}
+
+fn map_agent_status(s: zr::AgentStatus) -> AgentStatus {
+    match s {
+        zr::AgentStatus::Online => AgentStatus::Online,
+        zr::AgentStatus::Degraded => AgentStatus::Degraded,
+        zr::AgentStatus::Offline => AgentStatus::Offline,
+    }
+}
+
 // ── Inner mutable state ───────────────────────────────────────────────────────
+//
+// The embedded router owns status / session / connected-nodes / log via its
+// `AppState`. The Tauri layer keeps only the GUI screen-routing hint; the
+// effective screen is derived from the router status at snapshot time.
 
 pub struct InnerState {
     pub screen: AppScreen,
-    pub router_status: RouterStatus,
-    pub session_role: SessionRole,
-    pub session_id: String,
-    pub announces: HashMap<String, bot_framework::announce::AgentAnnounce>,
-    pub node_last_seen: HashMap<(String, String), Instant>,
-    pub log: Vec<String>,
-    pub error: Option<String>,
+    pub router: Arc<Mutex<zr::AppState>>,
 }
 
 impl InnerState {
-    fn new() -> Self {
+    fn new(router: Arc<Mutex<zr::AppState>>) -> Self {
         let screen = if DverseConfig::exists() {
             AppScreen::Loading
         } else {
             AppScreen::Login
         };
-        Self {
-            screen,
-            router_status: RouterStatus::Idle,
-            session_role: SessionRole::Admin,
-            session_id: String::new(),
-            announces: HashMap::new(),
-            node_last_seen: HashMap::new(),
-            log: Vec::new(),
-            error: None,
-        }
-    }
-
-    fn push_log(&mut self, msg: impl Into<String>) {
-        if self.log.len() >= 200 {
-            self.log.remove(0);
-        }
-        self.log.push(msg.into());
+        Self { screen, router }
     }
 
     fn snapshot(&self) -> AppSnapshot {
         let now = Instant::now();
-        let mut node_map: HashMap<String, NodeInfo> = HashMap::new();
+        let rs = self.router.lock().unwrap();
 
-        for ((cn, agent_name), &last) in &self.node_last_seen {
-            let age = now.saturating_duration_since(last);
-            let status = if age < Duration::from_secs(10) {
-                AgentStatus::Online
-            } else if age < Duration::from_secs(30) {
-                AgentStatus::Degraded
-            } else {
-                AgentStatus::Offline
-            };
-            let key = format!("{cn}/{agent_name}");
-            let ann = self.announces.get(&key);
-            let agent = AgentInfo {
-                version: ann.map(|a| a.version.clone()).unwrap_or_default(),
-                publishes: ann.map(|a| a.publishes.clone()).unwrap_or_default(),
-                subscribes: ann.map(|a| a.subscribes.clone()).unwrap_or_default(),
-                status,
-                last_seen_secs_ago: age.as_secs(),
-            };
-            node_map
-                .entry(cn.clone())
-                .or_insert_with(|| NodeInfo {
-                    cn: cn.clone(),
-                    agents: HashMap::new(),
-                })
-                .agents
-                .insert(agent_name.clone(), agent);
-        }
+        let router_status = map_router_status(&rs.router_status);
+        let error = match &rs.router_status {
+            zr::RouterStatus::Error(e) => Some(e.clone()),
+            _ => None,
+        };
 
-        let mut nodes: Vec<NodeInfo> = node_map.into_values().collect();
+        // Effective screen: stay on Login/Register until a session is staged,
+        // then follow the router's lifecycle. Frontend renders purely off this.
+        let screen = match self.screen {
+            AppScreen::Login => AppScreen::Login,
+            AppScreen::Register => AppScreen::Register,
+            _ => match rs.router_status {
+                zr::RouterStatus::Running => AppScreen::Main,
+                zr::RouterStatus::Error(_) => AppScreen::Login,
+                _ => AppScreen::Loading,
+            },
+        };
+
+        let mut nodes: Vec<NodeInfo> = rs
+            .connected_nodes
+            .values()
+            .map(|n| {
+                let agents = n
+                    .agents
+                    .iter()
+                    .map(|(name, ag)| {
+                        let agent = AgentInfo {
+                            version: ag.version.clone(),
+                            publishes: ag.publishes.clone(),
+                            subscribes: ag.subscribes.clone(),
+                            status: map_agent_status(ag.status),
+                            last_seen_secs_ago: now
+                                .saturating_duration_since(ag.last_seen)
+                                .as_secs(),
+                        };
+                        (name.clone(), agent)
+                    })
+                    .collect();
+                NodeInfo { cn: n.cn.clone(), agents }
+            })
+            .collect();
         nodes.sort_by(|a, b| a.cn.cmp(&b.cn));
-        for node in &mut nodes {
-            let mut names: Vec<String> = node.agents.keys().cloned().collect();
-            names.sort();
-            let sorted: HashMap<String, AgentInfo> = names
-                .into_iter()
-                .map(|n| {
-                    let v = node.agents.remove(&n).unwrap();
-                    (n, v)
-                })
-                .collect();
-            node.agents = sorted;
-        }
 
         AppSnapshot {
-            screen: self.screen.clone(),
-            router_status: self.router_status.clone(),
-            session_id: self.session_id.clone(),
-            session_role: SessionRoleDto::from(&self.session_role),
+            screen,
+            router_status,
+            session_id: rs.session_id.clone(),
+            session_role: SessionRoleDto::from(&rs.session_role),
             connected_nodes: nodes,
-            log: self.log.clone(),
-            error: self.error.clone(),
+            log: rs.log.clone(),
+            error,
         }
     }
 }
@@ -299,32 +306,48 @@ async fn login(
 
     cfg.save().map_err(|e| e.to_string())?;
 
-    let bg = {
+    // Stage the config onto the embedded router's AppState; the router::run
+    // task (spawned once at startup) is waiting in Phase 1 and picks it up.
+    let router = {
+        let st = state.0.lock().unwrap();
+        Arc::clone(&st.router)
+    };
+    info!(
+        username = %cfg.username,
+        session_id = %cfg.session_id(),
+        role = ?cfg.session_role,
+        "login: staging session config for embedded router"
+    );
+    {
+        let mut r = router.lock().unwrap();
+        r.session_role = cfg.session_role.clone();
+        r.session_id = cfg.session_id();
+        r.staged_config = Some(cfg);
+    }
+    {
         let mut st = state.0.lock().unwrap();
         st.screen = AppScreen::Loading;
-        st.session_role = cfg.session_role.clone();
-        st.session_id = cfg.session_id();
-        st.error = None;
-        Arc::clone(&state.0)
-    };
-
-    tokio::spawn(async move {
-        run_router_bg(bg, cfg).await;
-    });
+    }
 
     Ok(())
 }
 
 #[tauri::command]
 fn logout(state: State<'_, AppStateWrapper>) {
-    let mut st = state.0.lock().unwrap();
-    st.screen = AppScreen::Login;
-    st.router_status = RouterStatus::Idle;
-    st.session_id = String::new();
-    st.error = None;
-    st.log.clear();
-    st.announces.clear();
-    st.node_last_seen.clear();
+    // Soft logout: return the GUI to Login and clear the router's session view.
+    // The embedded router task keeps running in the background (matching the
+    // prior soft-logout behaviour); a full session teardown is future work.
+    let router = {
+        let mut st = state.0.lock().unwrap();
+        st.screen = AppScreen::Login;
+        Arc::clone(&st.router)
+    };
+    info!("logout: resetting session view (embedded router stays running)");
+    let mut r = router.lock().unwrap();
+    r.router_status = zr::RouterStatus::Idle;
+    r.session_id = String::new();
+    r.connected_nodes.clear();
+    r.log.clear();
 }
 
 // ── Commands: register ────────────────────────────────────────────────────────
@@ -350,11 +373,19 @@ async fn register(payload: RegisterPayload) -> Result<String, String> {
     if payload.password != payload.confirm {
         return Err("Passwords do not match.".into());
     }
-    register_user_async(&payload.username, &payload.password).await?;
-    Ok(format!(
-        "Account '{}' created. You can now sign in.",
-        payload.username
-    ))
+    match register_user_async(&payload.username, &payload.password).await {
+        Ok(()) => {
+            info!(username = %payload.username, "register: account created");
+            Ok(format!(
+                "Account '{}' created. You can now sign in.",
+                payload.username
+            ))
+        }
+        Err(e) => {
+            warn!(username = %payload.username, error = %e, "register: failed");
+            Err(e)
+        }
+    }
 }
 
 async fn register_user_async(username: &str, password: &str) -> Result<(), String> {
@@ -474,7 +505,9 @@ async fn discover_routers() -> Result<Vec<DiscoveredRouter>, String> {
     }
 
     let _ = daemon.shutdown();
-    Ok(routers.into_values().collect())
+    let found: Vec<DiscoveredRouter> = routers.into_values().collect();
+    info!(count = found.len(), "router discovery finished");
+    Ok(found)
 }
 
 // ── Commands: bot management ──────────────────────────────────────────────────
@@ -509,10 +542,12 @@ async fn start_bot(
     if !config.system_prompt.is_empty() {
         cmd.env("BOT_SYSTEM_PROMPT", &config.system_prompt);
     }
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to start bot: {e}"))?;
+    let child = cmd.spawn().map_err(|e| {
+        error!(id = %config.id, name = %config.name, error = %e, "start_bot: spawn failed");
+        format!("Failed to start bot: {e}")
+    })?;
     let id = config.id.clone();
+    info!(id = %id, name = %config.name, backend = %config.llm_backend, "start_bot: bot started");
     map.insert(id.clone(), child);
     Ok(BotStatus { id, running: true })
 }
@@ -525,6 +560,7 @@ async fn stop_bot(
     let mut map = processes.0.lock().map_err(|e| e.to_string())?;
     if let Some(mut child) = map.remove(&id) {
         child.kill().map_err(|e| format!("Failed to kill bot: {e}"))?;
+        info!(id = %id, "stop_bot: bot stopped");
     }
     Ok(BotStatus { id, running: false })
 }
@@ -582,8 +618,16 @@ pub fn run() {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
     let _guard = rt.enter();
     
-    let inner = Arc::new(Mutex::new(InnerState::new()));
-    let bg_inner = Arc::clone(&inner);
+    // The embedded router's AppState. If a config already exists it's loaded as
+    // `staged_config`, so router::run proceeds immediately; otherwise it waits
+    // in Phase 1 until `login` stages one.
+    let existing_config = DverseConfig::load().ok();
+    let router_state = Arc::new(Mutex::new(zr::AppState::new(existing_config)));
+    // Route tracing events (router, discovery, cert) into AppState.log so the
+    // GUI log panel and LoadingScreen show real progress.
+    zenoh_router::logging::init_with_gui_sink(Arc::clone(&router_state));
+
+    let inner = Arc::new(Mutex::new(InnerState::new(Arc::clone(&router_state))));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -591,14 +635,13 @@ pub fn run() {
         .manage(AppStateWrapper(inner))
         .manage(BotProcesses::default())
         .setup(move |_app| {
-            if DverseConfig::exists() {
-                if let Ok(cfg) = DverseConfig::load() {
-                    let bg = Arc::clone(&bg_inner);
-                    tokio::spawn(async move {
-                        run_router_bg(bg, cfg).await;
-                    });
-                }
-            }
+            // Run the real router (mode=router, discovery, ACL, agent inventory)
+            // in-process — once. It drives the shared AppState the snapshot reads.
+            info!("starting embedded dverse router");
+            let rs = Arc::clone(&router_state);
+            tokio::spawn(async move {
+                zenoh_router::router::run(rs).await;
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -613,163 +656,4 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-// ── Background: cert + zenoh client + agent subscription ─────────────────────
-
-async fn run_router_bg(state: Arc<Mutex<InnerState>>, cfg: DverseConfig) {
-    use bot_framework::cert;
-
-    {
-        let mut st = state.lock().unwrap();
-        st.router_status = RouterStatus::Acquiring;
-        st.session_role = cfg.session_role.clone();
-        st.session_id = cfg.session_id();
-        st.push_log("bootstrapping CA root certificate");
-    }
-
-    let ca_root_path = std::path::PathBuf::from(&cfg.ca_root_pem_path);
-    if let Err(e) = cert::bootstrap_ca_root(&cfg.ca_url, &ca_root_path).await {
-        let mut st = state.lock().unwrap();
-        st.router_status = RouterStatus::Error(e.to_string());
-        st.screen = AppScreen::Login;
-        st.error = Some(format!("CA bootstrap failed: {e}"));
-        return;
-    }
-
-    {
-        state.lock().unwrap().push_log("checking router certificate");
-    }
-
-    let cert_paths = match acquire_or_reuse(&cfg).await {
-        Ok(p) => p,
-        Err(e) => {
-            let mut st = state.lock().unwrap();
-            st.router_status = RouterStatus::Error(e.to_string());
-            st.screen = AppScreen::Login;
-            st.error = Some(format!("Certificate error: {e}"));
-            return;
-        }
-    };
-
-    {
-        let mut st = state.lock().unwrap();
-        st.router_status = RouterStatus::Running;
-        st.screen = AppScreen::Main;
-        st.push_log(format!(
-            "connected to router at {}",
-            cfg.router_endpoint
-        ));
-    }
-
-    subscribe_agents(state, cfg, cert_paths).await;
-}
-
-async fn acquire_or_reuse(
-    cfg: &DverseConfig,
-) -> anyhow::Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)> {
-    use bot_framework::cert;
-    let c = cert::cert_path(&cfg.cert_dir, "router");
-    let k = cert::key_path(&cfg.cert_dir, "router");
-    let ca = cert::ca_path(&cfg.cert_dir, "router");
-    let max_age = Duration::from_secs(23 * 3600);
-    if cert::needs_renewal(&c, max_age, Some(&cfg.operator_cn())).await {
-        let cert_cfg = cfg.cert_config_for("router")?;
-        cert::acquire(&cert_cfg).await
-    } else {
-        Ok((c, k, ca))
-    }
-}
-
-async fn subscribe_agents(
-    state: Arc<Mutex<InnerState>>,
-    cfg: DverseConfig,
-    (cert_p, key_p, ca_p): (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf),
-) {
-    use bot_framework::announce::AgentAnnounce;
-
-    let json_str =
-        |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
-
-    let mut zcfg = zenoh::Config::default();
-    let _ = zcfg.insert_json5("mode", "\"client\"");
-    let ep_json = format!("[\"{}\"]", cfg.router_endpoint);
-    let _ = zcfg.insert_json5("connect/endpoints", &ep_json);
-    let _ = zcfg.insert_json5(
-        "transport/link/tls/root_ca_certificate",
-        &json_str(&ca_p.to_string_lossy()),
-    );
-    let _ = zcfg.insert_json5("transport/link/tls/enable_mtls", "true");
-    let _ = zcfg.insert_json5(
-        "transport/link/tls/connect_certificate",
-        &json_str(&cert_p.to_string_lossy()),
-    );
-    let _ = zcfg.insert_json5(
-        "transport/link/tls/connect_private_key",
-        &json_str(&key_p.to_string_lossy()),
-    );
-    let _ = zcfg.insert_json5("scouting/multicast/enabled", "false");
-
-    let session = match zenoh::open(zcfg).await {
-        Ok(s) => s,
-        Err(e) => {
-            state
-                .lock()
-                .unwrap()
-                .push_log(format!("zenoh client connect failed: {e}"));
-            return;
-        }
-    };
-
-    let subscriber = match session
-        .declare_subscriber("dverse/nodes/announce/**")
-        .await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            state
-                .lock()
-                .unwrap()
-                .push_log(format!("subscriber failed: {e}"));
-            return;
-        }
-    };
-
-    let evict_after = Duration::from_secs(90);
-    let mut reap_tick = tokio::time::interval(Duration::from_secs(5));
-
-    loop {
-        tokio::select! {
-            msg = subscriber.recv_async() => {
-                match msg {
-                    Ok(s) => {
-                        let bytes = s.payload().to_bytes();
-                        if let Ok(ann) = serde_json::from_slice::<AgentAnnounce>(&bytes) {
-                            let key = format!("{}/{}", ann.cn, ann.agent_name);
-                            let now = Instant::now();
-                            let mut st = state.lock().unwrap();
-                            st.node_last_seen.insert(
-                                (ann.cn.clone(), ann.agent_name.clone()),
-                                now,
-                            );
-                            st.announces.insert(key, ann);
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-            _ = reap_tick.tick() => {
-                let now = Instant::now();
-                let mut st = state.lock().unwrap();
-                st.node_last_seen
-                    .retain(|_, last| now.saturating_duration_since(*last) < evict_after);
-                let live: std::collections::HashSet<String> = st
-                    .node_last_seen
-                    .keys()
-                    .map(|(cn, ag)| format!("{cn}/{ag}"))
-                    .collect();
-                st.announces.retain(|k, _| live.contains(k));
-            }
-        }
-    }
 }
