@@ -5,11 +5,9 @@
 //! the SRV target via `ServiceInfo::new`, no avahi-daemon coupling.
 
 use std::net::IpAddr;
-use std::sync::{Arc, Mutex};
 
 use mdns_sd::{ServiceDaemon, ServiceInfo};
-
-use crate::state::AppState;
+use tracing::{info, warn};
 
 use super::common::{
     detect_lan_ipv4, instance_name, srv_host_name, SERVICE_TYPE, TXT_KEY_CN, TXT_KEY_IP,
@@ -23,18 +21,15 @@ pub(super) fn mdns_sd_register(
     cn: &str,
     session_id: &str,
     port: u16,
-    state: &Arc<Mutex<AppState>>,
 ) -> Option<String> {
     let instance = instance_name(cn);
     let host = srv_host_name(cn);
     let lan_ip = detect_lan_ipv4();
 
-    state.lock().unwrap().push_log(format!(
-        "mDNS[mdns-sd]: LAN IP={}",
-        lan_ip
-            .map(|ip| ip.to_string())
-            .unwrap_or_else(|| "unknown".to_string())
-    ));
+    info!(
+        lan_ip = ?lan_ip.map(|ip| ip.to_string()),
+        "mdns-sd detected LAN IP"
+    );
 
     // TXT props: always `cn` + `session`, optionally `ip` for cross-stack
     // address recovery.
@@ -67,28 +62,25 @@ pub(super) fn mdns_sd_register(
     let svc = match svc_result {
         Ok(s) => s,
         Err(e) => {
-            state.lock().unwrap().push_log(format!(
-                "mDNS[mdns-sd]: service info error ({e}); peer discovery disabled"
-            ));
+            warn!(error = %e, "mdns-sd service info error; peer discovery disabled");
             return None;
         }
     };
 
     let fullname = svc.get_fullname().to_string();
-    state.lock().unwrap().push_log(format!(
-        "mDNS[mdns-sd]: registering {fullname} on port {port}"
-    ));
+    info!(fullname = %fullname, port, "mdns-sd registering");
 
     if let Err(e) = daemon.register(svc) {
-        state.lock().unwrap().push_log(format!(
-            "mDNS[mdns-sd]: register failed ({e}); peer discovery disabled"
-        ));
+        warn!(error = %e, "mdns-sd register failed; peer discovery disabled");
         return None;
     }
 
-    state.lock().unwrap().push_log(format!(
-        "mDNS[mdns-sd]: published {instance} on {SERVICE_TYPE} port {port}"
-    ));
+    info!(
+        instance = %instance,
+        service_type = SERVICE_TYPE,
+        port,
+        "mdns-sd published service"
+    );
 
     Some(fullname)
 }

@@ -100,9 +100,12 @@ impl AppState {
         }
     }
 
+    /// Append a single line to the in-memory log ring that backs the GUI's
+    /// bottom panel.  Now called only by `logging::GuiLogLayer` — business
+    /// code uses `tracing::info!` / `warn!` / `error!` and the layer routes
+    /// each event here.  Capped at 200 lines.
     pub fn push_log(&mut self, msg: impl Into<String>) {
         let entry = msg.into();
-        eprintln!("{entry}");
         if self.log.len() >= 200 {
             self.log.remove(0);
         }

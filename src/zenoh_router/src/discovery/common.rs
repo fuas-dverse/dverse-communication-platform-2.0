@@ -7,12 +7,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
-use std::sync::{Arc, Mutex};
 
 use mdns_sd::{IfKind, ServiceDaemon};
 use tokio::sync::watch;
-
-use crate::state::AppState;
+use tracing::{info, warn};
 
 // ── Service identity ─────────────────────────────────────────────────────────
 
@@ -107,18 +105,16 @@ pub(super) fn is_unroutable(addr: &IpAddr) -> bool {
 /// Create a new mdns-sd daemon with interface filters applied.
 /// Returns `None` (and logs) if the daemon couldn't be initialised — typically
 /// because UDP 5353 is bound by another process in an incompatible way.
-pub(super) fn create_filtered_daemon(state: &Arc<Mutex<AppState>>) -> Option<ServiceDaemon> {
+pub(super) fn create_filtered_daemon() -> Option<ServiceDaemon> {
     let daemon = match ServiceDaemon::new() {
         Ok(d) => d,
         Err(e) => {
-            state.lock().unwrap().push_log(format!(
-                "mDNS[mdns-sd]: daemon init failed ({e}); peer discovery disabled"
-            ));
+            warn!(error = %e, "mdns-sd daemon init failed; peer discovery disabled");
             return None;
         }
     };
-    state.lock().unwrap().push_log("mDNS[mdns-sd]: daemon started".to_string());
-    apply_interface_filters(&daemon, state);
+    info!("mdns-sd daemon started");
+    apply_interface_filters(&daemon);
     Some(daemon)
 }
 
@@ -133,7 +129,7 @@ pub(super) fn create_filtered_daemon(state: &Arc<Mutex<AppState>>) -> Option<Ser
 ///     but reach no remote peer; worse, on Windows a low-metric Npcap
 ///     adapter silently swallows our PTR responses entirely.
 ///   * Link-local IPv4 (169.254.0.0/16) — same story; no peer is there.
-fn apply_interface_filters(daemon: &ServiceDaemon, state: &Arc<Mutex<AppState>>) {
+fn apply_interface_filters(daemon: &ServiceDaemon) {
     let _ = daemon.disable_interface(IfKind::IPv6);
 
     let Ok(ifaces) = if_addrs::get_if_addrs() else { return };
@@ -146,11 +142,7 @@ fn apply_interface_filters(daemon: &ServiceDaemon, state: &Arc<Mutex<AppState>>)
         if !already_disabled.insert(iface.name.clone()) {
             continue;
         }
-        state.lock().unwrap().push_log(format!(
-            "mDNS[mdns-sd]: disabling virtual/link-local iface {} ({})",
-            iface.name,
-            iface.ip(),
-        ));
+        info!(iface = %iface.name, ip = %iface.ip(), "mdns-sd disabling virtual/link-local iface");
         let _ = daemon.disable_interface(IfKind::Name(iface.name.clone()));
     }
 }

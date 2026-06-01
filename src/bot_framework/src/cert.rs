@@ -165,13 +165,13 @@ pub async fn acquire(cfg: &CertConfig) -> Result<(PathBuf, PathBuf, PathBuf)> {
         .build()
         .context("building HTTP client")?;
 
-    println!("Authenticating {} with Keycloak...", cfg.username);
+    tracing::info!(username = %cfg.username, "authenticating with Keycloak");
     let id_token = fetch_id_token(cfg, &client).await?;
 
-    println!("Generating keypair and CSR...");
+    tracing::info!("generating keypair and CSR");
     let (csr_pem, key_pem) = generate_csr()?;
 
-    println!("Requesting certificate from Step-CA...");
+    tracing::info!("requesting certificate from Step-CA");
     let (cert_pem, ca_pem) = sign_with_step_ca(cfg, &client, &csr_pem, &id_token).await?;
 
     tokio::fs::create_dir_all(&cfg.out_dir)
@@ -195,7 +195,7 @@ pub async fn acquire(cfg: &CertConfig) -> Result<(PathBuf, PathBuf, PathBuf)> {
             .context("setting key file permissions")?;
     }
 
-    println!("Certificate written to {}", c.display());
+    tracing::info!(path = %c.display(), "certificate written");
     Ok((c, k, ca))
 }
 
@@ -265,7 +265,7 @@ pub async fn bootstrap_ca_root(ca_url: &str, out_path: &Path) -> Result<String> 
     }
     tokio::fs::write(out_path, &pem).await.context("writing CA root PEM")?;
 
-    println!("CA root certificate bootstrapped to {}", out_path.display());
+    tracing::info!(path = %out_path.display(), "CA root certificate bootstrapped");
     Ok(pem)
 }
 

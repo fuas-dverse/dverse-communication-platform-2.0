@@ -1,6 +1,7 @@
 mod constants;
 mod discovery;
 mod gui;
+mod logging;
 mod router;
 mod state;
 
@@ -32,6 +33,7 @@ fn run_normal() {
         Screen::Login(LoginForm::default())
     };
     let state = Arc::new(Mutex::new(AppState::new(existing_config)));
+    logging::init_with_gui_sink(Arc::clone(&state));
     let bg_state = Arc::clone(&state);
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -69,11 +71,13 @@ fn run_demo() {
         NodeInfo { cn: "alice".into(), last_seen: now, agents: alice_agents },
     );
 
-    state.push_log("[demo] Router started on tcp/0.0.0.0:7447");
-    state.push_log("[demo] Session admin: alice");
-    state.push_log("[demo] Auto-admitted: alice");
-    state.push_log("[demo] Auto-admitted: mybot");
-    launch_gui(Arc::new(Mutex::new(state)), Screen::Main);
+    let state = Arc::new(Mutex::new(state));
+    logging::init_with_gui_sink(Arc::clone(&state));
+    tracing::info!("[demo] router started on tcp/0.0.0.0:7447");
+    tracing::info!("[demo] session admin: alice");
+    tracing::info!("[demo] auto-admitted alice");
+    tracing::info!("[demo] auto-admitted mybot");
+    launch_gui(state, Screen::Main);
 }
 
 fn launch_gui(state: Arc<Mutex<AppState>>, screen: Screen) {

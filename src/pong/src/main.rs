@@ -7,11 +7,13 @@ use bot_framework::{
     config::DverseConfig,
     node::NodeConfig,
 };
+use tracing::info;
 
 const NODE_NAME: &str = "pong";
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    bot_framework::logging::init();
     let cfg = DverseConfig::load()
         .expect("No dverse config found. Run the router first to log in.");
 
@@ -20,14 +22,14 @@ async fn main() -> Result<()> {
     let ca_path   = cert::ca_path(&cfg.cert_dir, NODE_NAME);
 
     if cert::needs_renewal(&cert_path, Duration::from_secs(23 * 3600), Some(&cfg.operator_cn())).await {
-        println!("[{NODE_NAME}] Acquiring certificate…");
+        info!(node = NODE_NAME, "acquiring certificate");
         let cert_cfg = cfg.cert_config_for(NODE_NAME)?;
         cert::acquire(&cert_cfg).await?;
     } else {
-        println!("[{NODE_NAME}] Using cached certificate.");
+        info!(node = NODE_NAME, "using cached certificate");
     }
 
-    println!("[{NODE_NAME}] Connecting to {}…", cfg.router_endpoint);
+    info!(node = NODE_NAME, endpoint = %cfg.router_endpoint, "connecting to router");
     let session = NodeConfig::mtls(
         &cfg.router_endpoint,
         &ca_path,
@@ -38,7 +40,7 @@ async fn main() -> Result<()> {
     .await?;
 
     let cn = cfg.operator_cn();
-    println!("[{NODE_NAME}] Connected. Announcing as CN={cn}…");
+    info!(node = NODE_NAME, cn = %cn, "connected, announcing");
     // Heartbeat announcer — runs in a background tokio task as long as this
     // handle is alive.  Drop = stop heartbeating; the router will mark the
     // agent Degraded → Offline → evict it on its own timer.
@@ -57,13 +59,13 @@ async fn main() -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("declare_subscriber: {e}"))?;
 
-    println!("[{NODE_NAME}] Listening for pings…");
+    info!(node = NODE_NAME, "listening for pings");
     while let Ok(sample) = ping_sub.recv_async().await {
         let payload = String::from_utf8_lossy(&sample.payload().to_bytes()).into_owned();
-        println!("[{NODE_NAME}] ← {payload}");
+        info!(node = NODE_NAME, dir = "rx", payload = %payload, "received");
 
         let reply = format!("pong (echoing: {payload})");
-        println!("[{NODE_NAME}] → {reply}");
+        info!(node = NODE_NAME, dir = "tx", payload = %reply, "sending");
         session
             .put("dverse/pong", reply)
             .await

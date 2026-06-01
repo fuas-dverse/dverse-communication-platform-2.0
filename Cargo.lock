@@ -644,6 +644,8 @@ dependencies = [
  "serde_json",
  "tokio",
  "toml",
+ "tracing",
+ "tracing-subscriber",
  "x509-parser",
  "zenoh",
 ]
@@ -1277,6 +1279,7 @@ dependencies = [
  "anyhow",
  "bot-framework",
  "tokio",
+ "tracing",
  "zenoh",
 ]
 
@@ -1287,6 +1290,7 @@ dependencies = [
  "anyhow",
  "bot-framework",
  "tokio",
+ "tracing",
  "zenoh",
 ]
 
@@ -7272,6 +7276,8 @@ dependencies = [
  "reqwest",
  "serde_json",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "zenoh",
 ]
 

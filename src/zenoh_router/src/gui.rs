@@ -269,9 +269,12 @@ fn try_login(form: &mut LoginForm, state: &Arc<Mutex<AppState>>) {
         return;
     }
 
-    let mut st = state.lock().unwrap();
-    st.push_log(format!("Signed in as {}. Bootstrapping…", cfg.username));
-    st.staged_config = Some(cfg);
+    let username = cfg.username.clone();
+    {
+        let mut st = state.lock().unwrap();
+        st.staged_config = Some(cfg);
+    }
+    tracing::info!(username = %username, "signed in, bootstrapping");
     form.error = None;
 }
 
