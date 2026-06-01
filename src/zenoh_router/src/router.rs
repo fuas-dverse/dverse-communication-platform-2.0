@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use bot_framework::cert;
-use bot_framework::config::DverseConfig;
+use bot_framework::config::{DverseConfig, SessionRole};
 use tokio::sync::watch;
 use zenoh::Session;
 
@@ -38,10 +38,21 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
                 tokio::time::sleep(Duration::from_millis(200)).await;
             };
 
+            // Copy session role + id into AppState before MdnsHandle::publish so
+            // the GUI shows the badge immediately and DNS-SD includes session=
+            // in its first announcement.
+            let session_id = cfg.session_id();
+            {
+                let mut s = state.lock().unwrap();
+                s.session_role = cfg.session_role.clone();
+                s.session_id = session_id.clone();
+            }
+
             // Publish DNS-SD service record and start peer browsing once, on first config.
             if _mdns.is_none() {
                 if let Some(handle) = MdnsHandle::publish(
                     &cfg.operator_cn(),
+                    &session_id,
                     crate::constants::ROUTER_PORT,
                     &state,
                 ) {
@@ -60,6 +71,16 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
             if !st.admitted.contains(&operator_cn) {
                 st.admitted.push(operator_cn.clone());
                 st.push_log(format!("Pre-admitted operator CN: {operator_cn}"));
+            }
+            // When joining someone else's session, pre-admit the admin's CN too,
+            // so the admin's router (which carries that cert) can connect and
+            // form the mesh before we've heard a heartbeat from any of their
+            // agents.
+            if let SessionRole::Client { admin_cn } = &cfg.session_role {
+                if !admin_cn.is_empty() && !st.admitted.contains(admin_cn) {
+                    st.admitted.push(admin_cn.clone());
+                    st.push_log(format!("Pre-admitted session admin CN: {admin_cn}"));
+                }
             }
         }
 

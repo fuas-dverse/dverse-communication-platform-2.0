@@ -31,9 +31,14 @@ pub struct MdnsHandle {
 }
 
 impl MdnsHandle {
-    pub fn publish(cn: &str, port: u16, state: &Arc<Mutex<AppState>>) -> Option<Self> {
+    pub fn publish(
+        cn: &str,
+        session_id: &str,
+        port: u16,
+        state: &Arc<Mutex<AppState>>,
+    ) -> Option<Self> {
         state.lock().unwrap().push_log("mDNS: using mdns-sd backend".to_string());
-        mdns_sd_start(cn, port, state)
+        mdns_sd_start(cn, session_id, port, state)
     }
 }
 
@@ -53,12 +58,13 @@ impl Drop for MdnsSdSession {
 
 fn mdns_sd_start(
     cn: &str,
+    session_id: &str,
     port: u16,
     state: &Arc<Mutex<AppState>>,
 ) -> Option<MdnsHandle> {
     let daemon = create_filtered_daemon(state)?;
-    let fullname = announcing::mdns_sd_register(&daemon, cn, port, state)?;
-    let peer_rx = browsing::mdns_sd_start(&daemon, cn, state)?;
+    let fullname = announcing::mdns_sd_register(&daemon, cn, session_id, port, state)?;
+    let peer_rx = browsing::mdns_sd_start(&daemon, cn, session_id, state)?;
     Some(MdnsHandle {
         _inner: MdnsSdSession { daemon, fullname },
         peer_rx,

@@ -34,6 +34,12 @@ pub(super) const TXT_KEY_CN: &str = "cn";
 /// TLS.  Embedding the LAN IPv4 directly in TXT bypasses it.
 pub(super) const TXT_KEY_IP: &str = "ip";
 
+/// TXT key carrying the session identifier — the admin's CN for everyone
+/// participating in the session.  Browsers skip peers whose session value
+/// doesn't match their own, so two unrelated users on the same LAN don't
+/// auto-mesh their routers.
+pub(super) const TXT_KEY_SESSION: &str = "session";
+
 // ── Name builders ────────────────────────────────────────────────────────────
 
 /// Human-readable service instance name shown by DNS-SD browsers
