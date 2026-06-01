@@ -9,5 +9,6 @@ members = [
     "src/bot_framework",
     "src/zenoh_router",
     "src/ping",
-    "src/pong"
+    "src/pong",
+    "src/zenoh_client_launcher/src-tauri"
 ]

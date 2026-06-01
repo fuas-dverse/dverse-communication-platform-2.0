@@ -1,0 +1,46 @@
+[package]
+name = "zenoh-client-launcher"
+version = "0.1.0"
+description = "DVerse Zenoh Client Launcher — Tauri frontend for the router GUI"
+authors = []
+license = ""
+repository = ""
+edition = "2021"
+
+[lib]
+name = "zenoh_client_launcher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "zenoh-client-launcher"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-store = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
+mdns-sd = "0.13"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+anyhow = "1"
+bot-framework = { path = "../../bot_framework" }
+zenoh = { version = "1.8.0", default-features = false, features = [
+    "transport_tcp",
+    "transport_tls",
+] }
+dirs = "5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
