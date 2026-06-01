@@ -1,7 +1,12 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use bot_framework::{cert, config::DverseConfig, node::NodeConfig};
+use bot_framework::{
+    announce::{AgentAnnouncer, AgentInfo},
+    cert,
+    config::DverseConfig,
+    node::NodeConfig,
+};
 
 const NODE_NAME: &str = "pong";
 
@@ -34,10 +39,18 @@ async fn main() -> Result<()> {
 
     let cn = cfg.operator_cn();
     println!("[{NODE_NAME}] Connected. Announcing as CN={cn}…");
-    session
-        .put(format!("dverse/nodes/announce/{NODE_NAME}"), cn)
-        .await
-        .map_err(|e| anyhow::anyhow!("announce: {e}"))?;
+    // Heartbeat announcer — runs in a background tokio task as long as this
+    // handle is alive.  Drop = stop heartbeating; the router will mark the
+    // agent Degraded → Offline → evict it on its own timer.
+    let _announcer = AgentAnnouncer::start(
+        session.clone(),
+        AgentInfo {
+            cn: &cn,
+            agent_name: NODE_NAME,
+            version: env!("CARGO_PKG_VERSION"),
+            key_exprs: vec!["dverse/ping".into(), "dverse/pong".into()],
+        },
+    );
 
     let ping_sub = session
         .declare_subscriber("dverse/ping")
