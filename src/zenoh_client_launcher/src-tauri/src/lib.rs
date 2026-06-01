@@ -578,6 +578,10 @@ fn which_on_path(cmd: &str) -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Create a Tokio runtime to support async operations in Tauri callbacks
+    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+    let _guard = rt.enter();
+    
     let inner = Arc::new(Mutex::new(InnerState::new()));
     let bg_inner = Arc::clone(&inner);
 
