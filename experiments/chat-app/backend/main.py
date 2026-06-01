@@ -5,8 +5,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from .db import init_db
 from .routes import auth, rooms, messages, servers
+from .telemetry import setup_telemetry
 
 load_dotenv()
+
+_otel_enabled = setup_telemetry()
 
 app = FastAPI(title="ChatApp API")
 
@@ -17,6 +20,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if _otel_enabled:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    FastAPIInstrumentor().instrument_app(app)
 
 
 @app.on_event("startup")
@@ -37,3 +44,9 @@ app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(servers.router, prefix="/servers", tags=["servers"])
 app.include_router(rooms.router, prefix="/rooms", tags=["rooms"])
 app.include_router(messages.router, prefix="/rooms", tags=["messages"])
+
+
+@app.get("/bots/available", tags=["bots"])
+def get_available_bots():
+    from .services.zenoh_bridge import zenoh_bridge
+    return zenoh_bridge.get_available_bots()

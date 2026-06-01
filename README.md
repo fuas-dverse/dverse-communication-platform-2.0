@@ -12,8 +12,9 @@ Part of the Interaction Design (IXD) Research Group at Fontys ICT, Eindhoven. Su
 2. [Tech Stack](#tech-stack)
 3. [Architecture Decision Records](#architecture-decision-records)
 4. [CI/CD & Code Quality](#cicd--code-quality)
-5. [Collaboration with other DVerse Groups](#collaboration-with-other-dverse-groups)
-10. [Contributors](#contributors)
+5. [Running the App](#running-the-app)
+6. [Collaboration with other DVerse Groups](#collaboration-with-other-dverse-groups)
+7. [Contributors](#contributors)
 
 ---
 
@@ -49,6 +50,52 @@ All architectural decisions are documented in [`docs/adr/`](docs/adr/README.md).
 ## CI/CD & Code Quality
 
 Every pull request to the main branch and any pushes that change the code of the communications platform triggers the CI pipeline via **GitHub Actions**. Code quality is continuously monitored through **Codacy**, enforcing style, complexity, and security checks across both the Rust and Python codebases.
+
+---
+
+## Running the App
+
+The current runnable experiment is the **ChatApp** located in `experiments/chat-app/`. It is a full-stack chat workspace with JWT auth, servers, rooms, real-time updates, and AI bots.
+
+See [`experiments/chat-app/README.md`](experiments/chat-app/README.md) for full setup and configuration details.
+
+### 1. Start supporting services (optional)
+
+For Zenoh and local LLM support:
+
+```bash
+docker compose up -d
+```
+
+### 2. Start telemetry services (optional)
+
+For distributed tracing and metrics (Jaeger, OpenTelemetry Collector, Prometheus, Grafana):
+
+```bash
+docker-compose up jaeger otelcol prometheus grafana -d
+```
+
+Set `OTEL_ENABLED=true` in `experiments/chat-app/.env` to activate telemetry in the backend.
+
+### 3. Start the backend
+
+From `experiments/chat-app/`:
+
+```bash
+pip install -r backend/requirements.txt
+python -m uvicorn backend.main:app --reload --port 8001
+```
+
+### 4. Start the frontend
+
+From `experiments/chat-app/frontend/`:
+
+```bash
+npm install
+volta run --node 22 npm run dev
+```
+
+The UI runs on http://localhost:5173 and the API on http://localhost:8001.
 
 ---
 

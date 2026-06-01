@@ -1,11 +1,14 @@
 import os
 import re
+import time
 import json as json_lib
 
 import anthropic
 import httpx
+from opentelemetry.trace import Status, StatusCode
 
 from ..models.bot import BotConfig, BotPersonality, BotProvider, PERSONALITY_PROMPTS
+from ..telemetry import llm_duration, llm_requests, tracer
 
 DEFAULT_CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_LOCAL_URL = "http://localhost:11434"
@@ -31,12 +34,15 @@ def _messages_to_prompt(messages: list[dict]) -> str:
 def _build_system_prompt(bot: BotConfig) -> str:
     personality_key = BotPersonality(bot.personality)
     base = PERSONALITY_PROMPTS.get(personality_key, PERSONALITY_PROMPTS[BotPersonality.ASSISTANT])
-    return (
+    prompt = (
         f"{base}\n\n"
         f"Your name is @{bot.name}. "
         f"Only respond when directly mentioned with @{bot.name}. "
         "Keep responses concise and relevant to the conversation."
     )
+    if bot.system_prompt and bot.system_prompt.strip():
+        prompt += f"\n\nAdditional instructions: {bot.system_prompt.strip()}"
+    return prompt
 
 
 def call_claude(bot: BotConfig, triggering_message: str, history: list[dict]) -> str:
@@ -44,19 +50,35 @@ def call_claude(bot: BotConfig, triggering_message: str, history: list[dict]) ->
     model = bot.model or DEFAULT_CLAUDE_MODEL
     system_prompt = _build_system_prompt(bot)
 
-    client = anthropic.Anthropic(api_key=api_key)
-
     messages = [{"role": e["role"], "content": e["content"]} for e in history]
     if not messages or messages[-1]["content"] != triggering_message:
         messages.append({"role": "user", "content": triggering_message})
 
-    response = client.messages.create(
-        model=model,
-        max_tokens=1024,
-        system=system_prompt,
-        messages=messages,
-    )
-    return response.content[0].text
+    attrs = {"llm.provider": "anthropic", "llm.model": model}
+    with tracer.start_as_current_span("llm.anthropic") as span:
+        span.set_attribute("llm.provider", "anthropic")
+        span.set_attribute("llm.model", model)
+        span.set_attribute("llm.messages.count", len(messages))
+        t0 = time.monotonic()
+        try:
+            client = anthropic.Anthropic(api_key=api_key)
+            response = client.messages.create(
+                model=model,
+                max_tokens=1024,
+                system=system_prompt,
+                messages=messages,
+            )
+            text = response.content[0].text
+            span.set_attribute("llm.response.length", len(text))
+            llm_requests.add(1, {**attrs, "status": "ok"})
+            return text
+        except Exception as exc:
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, str(exc)))
+            llm_requests.add(1, {**attrs, "status": "error"})
+            raise
+        finally:
+            llm_duration.record(time.monotonic() - t0, attrs)
 
 
 def call_local(bot: BotConfig, triggering_message: str, history: list[dict]) -> str:
@@ -84,70 +106,86 @@ def call_local(bot: BotConfig, triggering_message: str, history: list[dict]) -> 
         candidates.append(("ollama_generate", f"{normalized_base_url}/api/generate"))
         candidates.append(("openai", f"{normalized_base_url}/v1/chat/completions"))
 
-    with httpx.Client(timeout=timeout_seconds) as client:
-        last_error: str | None = None
-        for api_style, url in candidates:
-            if api_style == "openai":
-                payload = {"model": model, "messages": messages}
-            elif api_style == "ollama":
-                payload = {"model": model, "messages": messages}
-                payload["stream"] = False
-            else:
-                payload = {
-                    "model": model,
-                    "prompt": _messages_to_prompt(messages),
-                    "stream": False,
-                }
+    attrs = {"llm.provider": "local", "llm.model": model}
+    with tracer.start_as_current_span("llm.local") as span:
+        span.set_attribute("llm.provider", "local")
+        span.set_attribute("llm.model", model)
+        span.set_attribute("llm.base_url", base_url)
+        t0 = time.monotonic()
+        try:
+            with httpx.Client(timeout=timeout_seconds) as client:
+                last_error: str | None = None
+                for api_style, url in candidates:
+                    if api_style == "openai":
+                        payload = {"model": model, "messages": messages}
+                    elif api_style == "ollama":
+                        payload = {"model": model, "messages": messages}
+                        payload["stream"] = False
+                    else:
+                        payload = {
+                            "model": model,
+                            "prompt": _messages_to_prompt(messages),
+                            "stream": False,
+                        }
 
-            resp = client.post(url, json=payload)
-            if resp.status_code == 404:
-                details = ""
-                try:
-                    payload = resp.json()
-                    if isinstance(payload, dict):
-                        details = str(payload.get("error", "")).strip()
-                except (json_lib.JSONDecodeError, ValueError):
-                    details = resp.text.strip()
+                    resp = client.post(url, json=payload)
+                    if resp.status_code == 404:
+                        details = ""
+                        try:
+                            payload = resp.json()
+                            if isinstance(payload, dict):
+                                details = str(payload.get("error", "")).strip()
+                        except (json_lib.JSONDecodeError, ValueError):
+                            details = resp.text.strip()
 
-                if "not found" in details.lower() and "model" in details.lower():
-                    raise RuntimeError(
-                        f"Local model '{model}' is not installed. "
-                        f"Run: ollama pull {model}"
-                    )
+                        if "not found" in details.lower() and "model" in details.lower():
+                            raise RuntimeError(
+                                f"Local model '{model}' is not installed. "
+                                f"Run: ollama pull {model}"
+                            )
 
-                last_error = f"404 from {url}{': ' + details if details else ''}"
-                continue
+                        last_error = f"404 from {url}{': ' + details if details else ''}"
+                        continue
 
-            resp.raise_for_status()
-            data = resp.json()
+                    resp.raise_for_status()
+                    data = resp.json()
 
-            if api_style == "openai":
-                raw_text = data["choices"][0]["message"]["content"]
-            elif api_style == "ollama":
-                raw_text = data.get("message", {}).get("content", "")
-            else:
-                raw_text = data.get("response", "")
+                    if api_style == "openai":
+                        raw_text = data["choices"][0]["message"]["content"]
+                    elif api_style == "ollama":
+                        raw_text = data.get("message", {}).get("content", "")
+                    else:
+                        raw_text = data.get("response", "")
 
-            # Some local endpoints/models return text in alternate fields.
-            if not raw_text:
-                raw_text = (
-                    data.get("response")
-                    or data.get("content")
-                    or data.get("output_text")
-                    or ""
-                )
+                    # Some local endpoints/models return text in alternate fields.
+                    if not raw_text:
+                        raw_text = (
+                            data.get("response")
+                            or data.get("content")
+                            or data.get("output_text")
+                            or ""
+                        )
 
-            if raw_text:
-                cleaned = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
-                if cleaned:
-                    return cleaned
+                    if raw_text:
+                        cleaned = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
+                        if cleaned:
+                            span.set_attribute("llm.response.length", len(cleaned))
+                            llm_requests.add(1, {**attrs, "status": "ok"})
+                            return cleaned
 
-            last_error = f"empty response from {url}"
-            continue
+                    last_error = f"empty response from {url}"
+                    continue
 
-    attempted = ", ".join(url for _, url in candidates)
-    detail = f" Last error: {last_error}" if last_error else ""
-    raise RuntimeError(f"Failed to reach local LLM endpoint. Tried: {attempted}.{detail}")
+            attempted = ", ".join(url for _, url in candidates)
+            detail = f" Last error: {last_error}" if last_error else ""
+            raise RuntimeError(f"Failed to reach local LLM endpoint. Tried: {attempted}.{detail}")
+        except Exception as exc:
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, str(exc)))
+            llm_requests.add(1, {**attrs, "status": "error"})
+            raise
+        finally:
+            llm_duration.record(time.monotonic() - t0, attrs)
 
 
 def build_bot_response(bot: BotConfig, triggering_message: str, history: list[dict]) -> str:
