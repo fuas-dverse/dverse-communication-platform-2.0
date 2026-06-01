@@ -53,7 +53,7 @@ impl Drop for MdnsSdSession {
 fn mdns_sd_start(cn: &str, session_id: &str, port: u16) -> Option<MdnsHandle> {
     let daemon = create_filtered_daemon()?;
     let fullname = announcing::mdns_sd_register(&daemon, cn, session_id, port)?;
-    let (peer_rx, sessions_rx) = browsing::mdns_sd_start(&daemon, cn, session_id)?;
+    let (peer_rx, sessions_rx) = browsing::mdns_sd_start(&daemon, cn)?;
     Some(MdnsHandle {
         _inner: MdnsSdSession { daemon, fullname },
         peer_rx,

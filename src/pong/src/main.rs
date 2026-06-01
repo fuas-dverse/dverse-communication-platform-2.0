@@ -36,6 +36,7 @@ async fn main() -> Result<()> {
         &cert_path,
         &key_path,
     )
+    .with_namespace(cfg.session_id())
     .connect()
     .await?;
 

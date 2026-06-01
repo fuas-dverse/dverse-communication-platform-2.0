@@ -17,7 +17,6 @@ use super::common::{
 pub(super) fn mdns_sd_start(
     daemon: &ServiceDaemon,
     my_cn: &str,
-    my_session: &str,
 ) -> Option<(watch::Receiver<Vec<String>>, watch::Receiver<Vec<String>>)> {
     let browse_rx = match daemon.browse(SERVICE_TYPE) {
         Ok(rx) => rx,
@@ -31,13 +30,12 @@ pub(super) fn mdns_sd_start(
     let (registry, peer_rx) = PeerRegistry::new();
     let (sessions, sessions_rx) = SessionRegistry::new();
     let my_cn = my_cn.to_string();
-    let my_session = my_session.to_string();
 
     std::thread::spawn(move || {
         let mut registry = registry;
         let mut sessions = sessions;
         while let Ok(event) = browse_rx.recv() {
-            handle_event(event, &my_cn, &my_session, &mut registry, &mut sessions);
+            handle_event(event, &my_cn, &mut registry, &mut sessions);
         }
         info!("mdns-sd browse loop exited");
     });
@@ -48,7 +46,6 @@ pub(super) fn mdns_sd_start(
 fn handle_event(
     event: ServiceEvent,
     my_cn: &str,
-    my_session: &str,
     registry: &mut PeerRegistry,
     sessions: &mut SessionRegistry,
 ) {
@@ -57,7 +54,7 @@ fn handle_event(
             info!(svc_type = %svc_type, fullname = %fullname, "mdns-sd service found");
         }
         ServiceEvent::ServiceResolved(info) => {
-            handle_resolved(info, my_cn, my_session, registry, sessions)
+            handle_resolved(info, my_cn, registry, sessions)
         }
         ServiceEvent::ServiceRemoved(_, fullname) => {
             info!(fullname = %fullname, "mdns-sd service removed");
@@ -77,7 +74,6 @@ fn handle_event(
 fn handle_resolved(
     info: ServiceInfo,
     my_cn: &str,
-    my_session: &str,
     registry: &mut PeerRegistry,
     sessions: &mut SessionRegistry,
 ) {
@@ -106,29 +102,11 @@ fn handle_resolved(
         return;
     }
 
-    // Session filter: skip peers that belong to a different session.  Without
-    // this, two unrelated users on the same LAN would auto-mesh their routers.
-    //
-    // Separate log line for "no session= TXT" because `unwrap_or_default()`
-    // collapses a missing TXT key and a literal empty string to the same ""
-    // value, and the failure mode (older binary, manual `dns-sd` test) is
-    // diagnostically different from "different session running on the LAN".
-    if remote_session.is_empty() {
-        info!(
-            cn = %remote_cn,
-            "mdns-sd skipping peer with no session= TXT key (likely older or non-DVerse announcement)"
-        );
-        return;
-    }
-    if remote_session != my_session {
-        info!(
-            cn = %remote_cn,
-            session = %remote_session,
-            ours = %my_session,
-            "mdns-sd skipping peer in different session"
-        );
-        return;
-    }
+    // Shared fabric: connect to *every* discovered router regardless of session.
+    // Cross-session traffic can't leak because each router + its agents run under
+    // a per-session Zenoh `namespace`, so a router only ever pub/subs its own
+    // session's keys; other sessions' traffic is merely relayed, never seen.
+    // (The earlier same-session peer filter is intentionally removed here.)
 
     let endpoints = endpoints_for(&info, remote_cn);
     if endpoints.is_empty() {

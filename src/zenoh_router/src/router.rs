@@ -158,7 +158,7 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
         if !peers.is_empty() {
             info!(?peers, "connecting to peer routers");
         }
-        let config = match build_zenoh_config(&cfg.router_listen, &ca_p, &cert_p, &key_p, &admitted, &peers) {
+        let config = match build_zenoh_config(&cfg.router_listen, &ca_p, &cert_p, &key_p, &admitted, &peers, &cfg.session_id()) {
             Ok(c) => c,
             Err(e) => {
                 state.lock().unwrap().router_status = RouterStatus::Error(e.to_string());
@@ -327,16 +327,24 @@ fn build_zenoh_config(
     key_path: &std::path::Path,
     admitted: &[String],
     peers: &[String],
+    namespace: &str,
 ) -> Result<zenoh::Config> {
     let mut cfg = zenoh::Config::default();
 
     zinsert(&mut cfg, "mode", "\"router\"")?;
     zinsert(&mut cfg, "listen/endpoints", &format!("[\"{listen_addr}\"]"))?;
     zinsert(&mut cfg, "scouting/multicast/enabled", "false")?;
+    // Session isolation on the shared fabric: every key this session pub/subs is
+    // transparently prefixed with the namespace, so routers + agents of one
+    // session never see another session's traffic even though all routers mesh.
+    // Agents must use the same namespace (see NodeConfig::with_namespace).
+    if !namespace.is_empty() {
+        zinsert(&mut cfg, "namespace", &json_str(namespace))?;
+    }
     zinsert(&mut cfg, "transport/link/tls/root_ca_certificate", &json_str(&ca_path.to_string_lossy()))?;
     zinsert(&mut cfg, "transport/link/tls/enable_mtls", "true")?;
     tls_identity(&mut cfg, cert_path, key_path)?;
-    zinsert(&mut cfg, "access_control", &build_acl_json(admitted))?;
+    zinsert(&mut cfg, "access_control", &build_acl_json(admitted, namespace))?;
 
     if !peers.is_empty() {
         let endpoints_json = serde_json::to_string(peers).unwrap();
@@ -349,9 +357,17 @@ fn build_zenoh_config(
     Ok(cfg)
 }
 
-fn build_acl_json(admitted: &[String]) -> String {
-    let announce_key = "dverse/nodes/announce/**";
-    let main_key = "dverse/**";
+fn build_acl_json(admitted: &[String], namespace: &str) -> String {
+    // Zenoh applies the session namespace at the face boundary and the ACL
+    // interceptor sees the *namespaced* key, so the rule key_exprs must carry
+    // the same prefix the namespace adds.
+    let prefix = if namespace.is_empty() {
+        String::new()
+    } else {
+        format!("{namespace}/")
+    };
+    let announce_key = format!("{prefix}dverse/nodes/announce/**");
+    let main_key = format!("{prefix}dverse/**");
     let announce_msgs = serde_json::json!(["put", "delete", "declare_subscriber"]);
     let main_msgs = serde_json::json!(["put", "delete", "declare_subscriber", "query", "reply", "declare_queryable"]);
 
@@ -440,4 +456,44 @@ fn tls_identity(
     zinsert(cfg, "transport/link/tls/connect_certificate", &cert)?;
     zinsert(cfg, "transport/link/tls/connect_private_key", &key)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// A mode=router session must open cleanly with a `namespace` set and do a
+    /// namespaced self pub/sub round-trip — i.e. namespacing the router doesn't
+    /// break its startup or local routing (the shared-fabric isolation, #108).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn router_opens_and_routes_with_namespace() {
+        use std::time::Duration;
+
+        let mut cfg = zenoh::Config::default();
+        cfg.insert_json5("mode", "\"router\"").unwrap();
+        // Ephemeral port so the test never collides with a running router.
+        cfg.insert_json5("listen/endpoints", "[\"tcp/127.0.0.1:0\"]").unwrap();
+        cfg.insert_json5("scouting/multicast/enabled", "false").unwrap();
+        cfg.insert_json5("namespace", "\"test-session\"").unwrap();
+
+        let session = zenoh::open(cfg).await.expect("router opens with namespace");
+
+        // Code uses un-namespaced keys; the namespace is applied transparently,
+        // so a self pub/sub on "dverse/agents/ping" must still match.
+        let sub = session
+            .declare_subscriber("dverse/agents/ping")
+            .await
+            .expect("declare subscriber");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        session
+            .put("dverse/agents/ping", "hello")
+            .await
+            .expect("put");
+
+        let sample = tokio::time::timeout(Duration::from_secs(2), sub.recv_async())
+            .await
+            .expect("recv did not time out")
+            .expect("got a sample");
+        assert_eq!(sample.payload().try_to_string().unwrap().as_ref(), "hello");
+
+        session.close().await.unwrap();
+    }
 }
