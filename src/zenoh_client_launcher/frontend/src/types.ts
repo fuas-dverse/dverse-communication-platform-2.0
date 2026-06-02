@@ -7,6 +7,8 @@ export interface DiscoveredRouter {
   host: string;
   port: number;
   zenoh_addr: string;
+  cn: string;
+  session: string;
 }
 
 export interface NetworkConfig {

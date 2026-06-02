@@ -17,8 +17,7 @@ export default function MainScreen({ snapshot }: Props) {
             <span className="text-blue-300 font-medium">Admin · {session_id}</span>
           ) : (
             <span className="text-green-300 font-medium">
-              Joined · admin:{" "}
-              {(session_role as { kind: "client"; admin_cn: string }).admin_cn}
+              Joined · admin: {(session_role as { kind: "client"; admin_cn: string }).admin_cn}
             </span>
           )}
         </div>
@@ -32,7 +31,6 @@ export default function MainScreen({ snapshot }: Props) {
 
       {/* Main area */}
       <div className="flex-1 overflow-hidden flex flex-col">
-        {/* Connected nodes */}
         <div className="flex-1 overflow-y-auto p-4">
           <h2 className="text-sm font-semibold text-gray-300 mb-3">Connected nodes</h2>
           {connected_nodes.length === 0 ? (
@@ -88,7 +86,6 @@ function RouterStatusBadge({ status }: { status: RouterStatus }) {
 
 function NodeCard({ node }: { node: NodeInfo }) {
   const agents = Object.entries(node.agents).sort(([a], [b]) => a.localeCompare(b));
-
   return (
     <div>
       <div className="text-sm font-semibold text-gray-200 mb-1">{node.cn}</div>
@@ -103,21 +100,15 @@ function NodeCard({ node }: { node: NodeInfo }) {
                 <span className="font-mono text-sm text-gray-200">{name}</span>
                 <span className="text-xs text-gray-500">v{ag.version}</span>
                 <span className="text-xs text-gray-600">·</span>
-                <span className="text-xs text-gray-600">
-                  {formatAgo(ag.last_seen_secs_ago)}
-                </span>
+                <span className="text-xs text-gray-600">{formatAgo(ag.last_seen_secs_ago)}</span>
               </div>
               {(ag.publishes.length > 0 || ag.subscribes.length > 0) && (
                 <div className="pl-5 mt-0.5 space-y-0.5">
                   {ag.publishes.map((ke) => (
-                    <div key={ke} className="font-mono text-xs text-gray-500">
-                      → {ke}
-                    </div>
+                    <div key={ke} className="font-mono text-xs text-gray-500">→ {ke}</div>
                   ))}
                   {ag.subscribes.map((ke) => (
-                    <div key={ke} className="font-mono text-xs text-gray-500">
-                      ← {ke}
-                    </div>
+                    <div key={ke} className="font-mono text-xs text-gray-500">← {ke}</div>
                   ))}
                 </div>
               )}

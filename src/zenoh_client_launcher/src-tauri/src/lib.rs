@@ -1,18 +1,17 @@
 use std::collections::HashMap;
 use std::process::Child;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use bot_framework::config::{DverseConfig, SessionRole};
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use tauri::State;
-use tracing::{error, info, warn};
-// The embedded router's state is the source of truth for status / session /
-// connected-nodes / log. The Tauri layer only adds GUI screen routing.
+use tracing::info;
 use zenoh_router::state as zr;
 
-// ── Constants (mirrored from zenoh_router) ────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const KEYCLOAK_URL: &str = "https://auth.dverse.yordanmitev.me";
 const KEYCLOAK_REALM: &str = "dverse";
@@ -26,7 +25,18 @@ const REGISTRATION_CLIENT_SECRET: &str = "Xv2kR8nQ5mW4jT7eBpL3hC9gF6dA0sYz";
 const DVERSE_SERVICE: &str = "_dverse._tcp.local.";
 const DISCOVERY_TIMEOUT_MS: u64 = 3000;
 
-// ── State types ───────────────────────────────────────────────────────────────
+// ── GUI screen (Tauri-side only) ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AppScreen {
+    Login,
+    Register,
+    Loading,
+    Main,
+}
+
+// ── Snapshot DTOs sent to frontend ───────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -62,15 +72,6 @@ pub struct NodeInfo {
     pub agents: HashMap<String, AgentInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum AppScreen {
-    Login,
-    Register,
-    Loading,
-    Main,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionRoleDto {
@@ -100,8 +101,6 @@ pub struct AppSnapshot {
     pub error: Option<String>,
 }
 
-// ── Status mappers (library types → serde DTOs) ───────────────────────────────
-
 fn map_router_status(s: &zr::RouterStatus) -> RouterStatus {
     match s {
         zr::RouterStatus::Idle => RouterStatus::Idle,
@@ -121,13 +120,12 @@ fn map_agent_status(s: zr::AgentStatus) -> AgentStatus {
     }
 }
 
-// ── Inner mutable state ───────────────────────────────────────────────────────
-//
-// The embedded router owns status / session / connected-nodes / log via its
-// `AppState`. The Tauri layer keeps only the GUI screen-routing hint; the
-// effective screen is derived from the router status at snapshot time.
+// ── Inner state (GUI screen + pointer to router AppState) ─────────────────────
 
 pub struct InnerState {
+    /// Current GUI screen. Starts as Login (no config) or Loading (config exists).
+    /// Set to Loading by `login` command; transitions to Main/Login are derived
+    /// from router status in `snapshot()`.
     pub screen: AppScreen,
     pub router: Arc<Mutex<zr::AppState>>,
 }
@@ -152,15 +150,21 @@ impl InnerState {
             _ => None,
         };
 
-        // Effective screen: stay on Login/Register until a session is staged,
-        // then follow the router's lifecycle. Frontend renders purely off this.
-        let screen = match self.screen {
+        // Screen derivation:
+        //   Login/Register → stay (user hasn't submitted credentials yet)
+        //   Loading → follow router lifecycle (Running→Main, Error→Login, else stay Loading)
+        //   Main → stay (router is up; if it errors the next poll flips back)
+        let screen = match &self.screen {
             AppScreen::Login => AppScreen::Login,
             AppScreen::Register => AppScreen::Register,
-            _ => match rs.router_status {
+            AppScreen::Loading => match rs.router_status {
                 zr::RouterStatus::Running => AppScreen::Main,
                 zr::RouterStatus::Error(_) => AppScreen::Login,
                 _ => AppScreen::Loading,
+            },
+            AppScreen::Main => match rs.router_status {
+                zr::RouterStatus::Error(_) => AppScreen::Login,
+                _ => AppScreen::Main,
             },
         };
 
@@ -168,11 +172,11 @@ impl InnerState {
             .connected_nodes
             .values()
             .map(|n| {
-                let agents = n
+                let mut agents: HashMap<String, AgentInfo> = n
                     .agents
                     .iter()
                     .map(|(name, ag)| {
-                        let agent = AgentInfo {
+                        let info = AgentInfo {
                             version: ag.version.clone(),
                             publishes: ag.publishes.clone(),
                             subscribes: ag.subscribes.clone(),
@@ -181,10 +185,16 @@ impl InnerState {
                                 .saturating_duration_since(ag.last_seen)
                                 .as_secs(),
                         };
-                        (name.clone(), agent)
+                        (name.clone(), info)
                     })
                     .collect();
-                NodeInfo { cn: n.cn.clone(), agents }
+                // Sort agents for stable display order.
+                let sorted: HashMap<String, AgentInfo> = {
+                    let mut keys: Vec<String> = agents.keys().cloned().collect();
+                    keys.sort();
+                    keys.into_iter().map(|k| { let v = agents.remove(&k).unwrap(); (k, v) }).collect()
+                };
+                NodeInfo { cn: n.cn.clone(), agents: sorted }
             })
             .collect();
         nodes.sort_by(|a, b| a.cn.cmp(&b.cn));
@@ -208,7 +218,7 @@ pub struct AppStateWrapper(pub Arc<Mutex<InnerState>>);
 #[derive(Default)]
 pub struct BotProcesses(Mutex<HashMap<String, Child>>);
 
-// ── Wire DTOs ─────────────────────────────────────────────────────────────────
+// ── Wire types ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BotConfig {
@@ -236,9 +246,11 @@ pub struct DiscoveredRouter {
     pub host: String,
     pub port: u16,
     pub zenoh_addr: String,
+    pub cn: String,
+    pub session: String,
 }
 
-// ── Commands: state ───────────────────────────────────────────────────────────
+// ── Commands: snapshot ────────────────────────────────────────────────────────
 
 #[tauri::command]
 fn get_state(state: State<'_, AppStateWrapper>) -> AppSnapshot {
@@ -247,30 +259,25 @@ fn get_state(state: State<'_, AppStateWrapper>) -> AppSnapshot {
 
 // ── Commands: auth ────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
-pub struct LoginPayload {
-    pub username: String,
-    pub password: String,
-    pub create_session: bool,
-    pub join_admin_cn: String,
-}
-
 #[tauri::command]
 async fn login(
-    payload: LoginPayload,
+    username: String,
+    password: String,
+    create_session: bool,
+    join_admin_cn: String,
     state: State<'_, AppStateWrapper>,
 ) -> Result<(), String> {
-    if payload.username.is_empty() {
+    if username.is_empty() {
         return Err("Username is required.".into());
     }
-    if payload.password.is_empty() {
+    if password.is_empty() {
         return Err("Password is required.".into());
     }
 
-    let session_role = if payload.create_session {
+    let session_role = if create_session {
         SessionRole::Admin
     } else {
-        let admin_cn = payload.join_admin_cn.trim().to_string();
+        let admin_cn = join_admin_cn.trim().to_string();
         if admin_cn.is_empty() {
             return Err("Admin username is required to join a session.".into());
         }
@@ -282,16 +289,12 @@ async fn login(
         .join("dverse")
         .join("certs");
 
-    let cn = payload
-        .username
-        .split('@')
-        .next()
-        .unwrap_or(&payload.username);
+    let cn = username.split('@').next().unwrap_or(&username);
     let router_endpoint = format!("tls/zenoh-{cn}.local:{ROUTER_PORT}");
 
     let cfg = DverseConfig {
-        username: payload.username.clone(),
-        password: payload.password.clone(),
+        username: username.clone(),
+        password: password.clone(),
         keycloak_url: KEYCLOAK_URL.into(),
         keycloak_realm: KEYCLOAK_REALM.into(),
         client_id: CLIENT_ID.into(),
@@ -306,93 +309,56 @@ async fn login(
 
     cfg.save().map_err(|e| e.to_string())?;
 
-    // Stage the config onto the embedded router's AppState; the router::run
-    // task (spawned once at startup) is waiting in Phase 1 and picks it up.
-    let router = {
-        let st = state.0.lock().unwrap();
-        Arc::clone(&st.router)
-    };
-    info!(
-        username = %cfg.username,
-        session_id = %cfg.session_id(),
-        role = ?cfg.session_role,
-        "login: staging session config for embedded router"
-    );
+    // Stage config onto the embedded router's AppState so router::run picks it up.
+    let router = Arc::clone(&state.0.lock().unwrap().router);
     {
         let mut r = router.lock().unwrap();
         r.session_role = cfg.session_role.clone();
         r.session_id = cfg.session_id();
         r.staged_config = Some(cfg);
     }
-    {
-        let mut st = state.0.lock().unwrap();
-        st.screen = AppScreen::Loading;
-    }
+    // Flip screen to Loading — snapshot() will transition to Main once running.
+    state.0.lock().unwrap().screen = AppScreen::Loading;
 
     Ok(())
 }
 
 #[tauri::command]
 fn logout(state: State<'_, AppStateWrapper>) {
-    // Soft logout: return the GUI to Login and clear the router's session view.
-    // The embedded router task keeps running in the background (matching the
-    // prior soft-logout behaviour); a full session teardown is future work.
-    let router = {
-        let mut st = state.0.lock().unwrap();
-        st.screen = AppScreen::Login;
-        Arc::clone(&st.router)
-    };
-    info!("logout: resetting session view (embedded router stays running)");
-    let mut r = router.lock().unwrap();
-    r.router_status = zr::RouterStatus::Idle;
+    let mut st = state.0.lock().unwrap();
+    st.screen = AppScreen::Login;
+    // Clear session view in router state so the GUI resets cleanly.
+    let mut r = st.router.lock().unwrap();
     r.session_id = String::new();
-    r.connected_nodes.clear();
     r.log.clear();
+    r.connected_nodes.clear();
 }
 
 // ── Commands: register ────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
-pub struct RegisterPayload {
-    pub username: String,
-    pub password: String,
-    pub confirm: String,
-}
-
 #[tauri::command]
-async fn register(payload: RegisterPayload) -> Result<String, String> {
-    if payload.username.is_empty() {
+async fn register(username: String, password: String, confirm: String) -> Result<String, String> {
+    if username.is_empty() {
         return Err("Username is required.".into());
     }
-    if payload.username.contains('@') || payload.username.contains(' ') {
+    if username.contains('@') || username.contains(' ') {
         return Err("Username must not contain '@' or spaces.".into());
     }
-    if payload.password.len() < 8 {
+    if password.len() < 8 {
         return Err("Password must be at least 8 characters.".into());
     }
-    if payload.password != payload.confirm {
+    if password != confirm {
         return Err("Passwords do not match.".into());
     }
-    match register_user_async(&payload.username, &payload.password).await {
-        Ok(()) => {
-            info!(username = %payload.username, "register: account created");
-            Ok(format!(
-                "Account '{}' created. You can now sign in.",
-                payload.username
-            ))
-        }
-        Err(e) => {
-            warn!(username = %payload.username, error = %e, "register: failed");
-            Err(e)
-        }
-    }
+    register_user_async(&username, &password).await?;
+    info!(username = %username, "register: account created");
+    Ok(format!("Account '{username}' created. You can now sign in."))
 }
 
 async fn register_user_async(username: &str, password: &str) -> Result<(), String> {
     let client = reqwest::Client::new();
     let token_url =
         format!("{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/token");
-
     let token_resp = client
         .post(&token_url)
         .form(&[
@@ -409,7 +375,6 @@ async fn register_user_async(username: &str, password: &str) -> Result<(), Strin
     if !status.is_success() {
         return Err(format!("Admin login failed ({status}): {body}"));
     }
-
     let token: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("Token parse error: {e}"))?;
     let access_token = token["access_token"]
@@ -429,7 +394,6 @@ async fn register_user_async(username: &str, password: &str) -> Result<(), Strin
         "requiredActions": [],
         "credentials": [{"type": "password", "value": password, "temporary": false}]
     });
-
     let create_resp = client
         .post(&users_url)
         .bearer_auth(&access_token)
@@ -451,7 +415,7 @@ async fn register_user_async(username: &str, password: &str) -> Result<(), Strin
     }
 }
 
-// ── Commands: router discovery ────────────────────────────────────────────────
+// ── Commands: discovery ───────────────────────────────────────────────────────
 
 #[tauri::command]
 async fn discover_routers() -> Result<Vec<DiscoveredRouter>, String> {
@@ -467,36 +431,29 @@ async fn discover_routers() -> Result<Vec<DiscoveredRouter>, String> {
 
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
+        if remaining.is_zero() { break; }
         let ev = tokio::time::timeout(
             remaining,
             tokio::task::spawn_blocking({
                 let recv = receiver.clone();
                 move || recv.recv()
             }),
-        )
-        .await;
+        ).await;
 
         match ev {
             Ok(Ok(Ok(ServiceEvent::ServiceResolved(info)))) => {
-                let host = info
-                    .get_addresses()
-                    .iter()
-                    .next()
-                    .map(|a| a.to_string())
-                    .unwrap_or_default();
-                if host.is_empty() {
-                    continue;
-                }
+                let host = info.get_addresses().iter().next()
+                    .map(|a| a.to_string()).unwrap_or_default();
+                if host.is_empty() { continue; }
                 let port = info.get_port();
                 let name = info.get_fullname().to_string();
+                let props = info.get_properties();
+                let cn = props.get("cn").map(|v| v.val_str()).unwrap_or_default().to_string();
+                let session = props.get("session").map(|v| v.val_str())
+                    .unwrap_or_else(|| cn.as_str()).to_string();
                 let zenoh_addr = format!("tcp/{host}:{port}");
-                routers.insert(
-                    zenoh_addr.clone(),
-                    DiscoveredRouter { name, host, port, zenoh_addr },
-                );
+                routers.insert(zenoh_addr.clone(),
+                    DiscoveredRouter { name, host, port, zenoh_addr, cn, session });
             }
             Ok(Ok(Ok(ServiceEvent::SearchStopped(_)))) => break,
             Ok(Ok(Ok(_))) => {}
@@ -524,17 +481,12 @@ async fn start_bot(
     let (program, args) = resolve_bot_agent(&config)?;
     let mut cmd = std::process::Command::new(&program);
     cmd.args(&args)
-        .arg("--name")
-        .arg(&config.name)
-        .arg("--router")
-        .arg(&config.zenoh_router)
-        .arg("--description")
-        .arg(&config.description);
+        .arg("--name").arg(&config.name)
+        .arg("--router").arg(&config.zenoh_router)
+        .arg("--description").arg(&config.description);
     if config.llm_backend == "ollama" {
-        cmd.arg("--ollama-url")
-            .arg(&config.ollama_url)
-            .arg("--model")
-            .arg(&config.ollama_model);
+        cmd.arg("--ollama-url").arg(&config.ollama_url)
+            .arg("--model").arg(&config.ollama_model);
     }
     if !config.claude_api_key.is_empty() {
         cmd.env("ANTHROPIC_API_KEY", &config.claude_api_key);
@@ -542,25 +494,17 @@ async fn start_bot(
     if !config.system_prompt.is_empty() {
         cmd.env("BOT_SYSTEM_PROMPT", &config.system_prompt);
     }
-    let child = cmd.spawn().map_err(|e| {
-        error!(id = %config.id, name = %config.name, error = %e, "start_bot: spawn failed");
-        format!("Failed to start bot: {e}")
-    })?;
+    let child = cmd.spawn().map_err(|e| format!("Failed to start bot: {e}"))?;
     let id = config.id.clone();
-    info!(id = %id, name = %config.name, backend = %config.llm_backend, "start_bot: bot started");
     map.insert(id.clone(), child);
     Ok(BotStatus { id, running: true })
 }
 
 #[tauri::command]
-async fn stop_bot(
-    id: String,
-    processes: State<'_, BotProcesses>,
-) -> Result<BotStatus, String> {
+async fn stop_bot(id: String, processes: State<'_, BotProcesses>) -> Result<BotStatus, String> {
     let mut map = processes.0.lock().map_err(|e| e.to_string())?;
     if let Some(mut child) = map.remove(&id) {
         child.kill().map_err(|e| format!("Failed to kill bot: {e}"))?;
-        info!(id = %id, "stop_bot: bot stopped");
     }
     Ok(BotStatus { id, running: false })
 }
@@ -570,8 +514,7 @@ async fn get_bot_statuses(
     processes: State<'_, BotProcesses>,
 ) -> Result<Vec<BotStatus>, String> {
     let mut map = processes.0.lock().map_err(|e| e.to_string())?;
-    let statuses: Vec<BotStatus> = map
-        .iter_mut()
+    let statuses: Vec<BotStatus> = map.iter_mut()
         .map(|(id, child)| {
             let running = child.try_wait().map(|s| s.is_none()).unwrap_or(false);
             BotStatus { id: id.clone(), running }
@@ -582,11 +525,7 @@ async fn get_bot_statuses(
 }
 
 fn resolve_bot_agent(config: &BotConfig) -> Result<(String, Vec<String>), String> {
-    let candidates = [
-        "./bot_agent.py",
-        "../chat-app/bot_agent.py",
-        "../../chat-app/bot_agent.py",
-    ];
+    let candidates = ["./bot_agent.py", "../chat-app/bot_agent.py", "../../chat-app/bot_agent.py"];
     for path in &candidates {
         if std::path::Path::new(path).exists() {
             if which_on_path("uv") {
@@ -604,27 +543,19 @@ fn resolve_bot_agent(config: &BotConfig) -> Result<(String, Vec<String>), String
 
 fn which_on_path(cmd: &str) -> bool {
     std::process::Command::new("which")
-        .arg(cmd)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .arg(cmd).output()
+        .map(|o| o.status.success()).unwrap_or(false)
 }
 
-// ── Tauri entry point ─────────────────────────────────────────────────────────
+// ── Entry point ───────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Create a Tokio runtime to support async operations in Tauri callbacks
-    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-    let _guard = rt.enter();
-    
-    // The embedded router's AppState. If a config already exists it's loaded as
-    // `staged_config`, so router::run proceeds immediately; otherwise it waits
-    // in Phase 1 until `login` stages one.
+    // Load saved config if present — router::run will start immediately.
     let existing_config = DverseConfig::load().ok();
     let router_state = Arc::new(Mutex::new(zr::AppState::new(existing_config)));
-    // Route tracing events (router, discovery, cert) into AppState.log so the
-    // GUI log panel and LoadingScreen show real progress.
+
+    // Wire tracing events into AppState.log (same as egui build).
     zenoh_router::logging::init_with_gui_sink(Arc::clone(&router_state));
 
     let inner = Arc::new(Mutex::new(InnerState::new(Arc::clone(&router_state))));
@@ -635,11 +566,11 @@ pub fn run() {
         .manage(AppStateWrapper(inner))
         .manage(BotProcesses::default())
         .setup(move |_app| {
-            // Run the real router (mode=router, discovery, ACL, agent inventory)
-            // in-process — once. It drives the shared AppState the snapshot reads.
+            // Spawn the embedded router once. It blocks in Phase 1 until
+            // `login` stages a DverseConfig onto router_state.staged_config.
             info!("starting embedded dverse router");
             let rs = Arc::clone(&router_state);
-            tokio::spawn(async move {
+            tauri::async_runtime::spawn(async move {
                 zenoh_router::router::run(rs).await;
             });
             Ok(())

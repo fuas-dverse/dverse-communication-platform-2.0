@@ -21,7 +21,7 @@ export default function RegisterScreen({ prefillUsername = "", onBack }: Props) 
     setSuccess(null);
     try {
       const msg = await invoke<string>("register", {
-        payload: { username, password, confirm },
+        username, password, confirm,
       });
       setSuccess(msg);
     } catch (e) {

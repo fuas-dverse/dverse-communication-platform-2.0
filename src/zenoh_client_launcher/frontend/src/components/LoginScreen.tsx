@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import type { DiscoveredRouter } from "../types";
 
 interface Props {
   prefillUsername?: string;
@@ -7,7 +8,11 @@ interface Props {
   onNavigateRegister: () => void;
 }
 
-export default function LoginScreen({ prefillUsername = "", initialError = null, onNavigateRegister }: Props) {
+export default function LoginScreen({
+  prefillUsername = "",
+  initialError = null,
+  onNavigateRegister,
+}: Props) {
   const [username, setUsername] = useState(prefillUsername);
   const [password, setPassword] = useState("");
   const [createSession, setCreateSession] = useState(true);
@@ -15,18 +20,46 @@ export default function LoginScreen({ prefillUsername = "", initialError = null,
   const [error, setError] = useState<string | null>(initialError);
   const [working, setWorking] = useState(false);
 
+  const [routers, setRouters] = useState<DiscoveredRouter[]>([]);
+  const [scanning, setScanning] = useState(false);
+  const [selectedRouter, setSelectedRouter] = useState<DiscoveredRouter | null>(null);
+
+  // Auto-scan when switching to "Join session".
+  useEffect(() => {
+    if (!createSession) {
+      handleScan();
+    } else {
+      setRouters([]);
+      setSelectedRouter(null);
+    }
+  }, [createSession]);
+
+  async function handleScan() {
+    setScanning(true);
+    setRouters([]);
+    setSelectedRouter(null);
+    try {
+      const found = await invoke<DiscoveredRouter[]>("discover_routers");
+      setRouters(found);
+    } catch (_) {}
+    setScanning(false);
+  }
+
+  function selectRouter(r: DiscoveredRouter) {
+    setSelectedRouter(r);
+    setJoinAdminCn(r.session || r.cn);
+  }
+
   async function handleLogin() {
     if (working) return;
     setWorking(true);
     setError(null);
     try {
       await invoke("login", {
-        payload: {
-          username,
-          password,
-          create_session: createSession,
-          join_admin_cn: joinAdminCn,
-        },
+        username,
+        password,
+        createSession,
+        joinAdminCn,
       });
     } catch (e) {
       setError(String(e));
@@ -41,7 +74,7 @@ export default function LoginScreen({ prefillUsername = "", initialError = null,
 
   return (
     <div className="flex flex-col items-center justify-center h-full">
-      <div className="w-full max-w-sm space-y-6">
+      <div className="w-full max-w-sm space-y-5">
         <div className="text-center">
           <h1 className="text-2xl font-semibold text-gray-100">Sign in to dverse</h1>
           <p className="text-sm text-gray-500 mt-1">https://auth.dverse.yordanmitev.me</p>
@@ -71,7 +104,7 @@ export default function LoginScreen({ prefillUsername = "", initialError = null,
           </Field>
         </div>
 
-        <div className="space-y-3 pt-1">
+        <div className="space-y-3">
           <div className="flex gap-6">
             <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
               <input
@@ -94,27 +127,72 @@ export default function LoginScreen({ prefillUsername = "", initialError = null,
           </div>
 
           {!createSession && (
-            <Field label="Admin username">
-              <input
-                type="text"
-                value={joinAdminCn}
-                onChange={(e) => setJoinAdminCn(e.target.value)}
-                onKeyDown={handleKeyDown}
-                className="input"
-                placeholder="e.g. alice"
-              />
-            </Field>
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-500">Available sessions</span>
+                  <button
+                    onClick={handleScan}
+                    disabled={scanning}
+                    className="text-xs text-zenoh-400 hover:text-zenoh-300 transition-colors disabled:opacity-50"
+                  >
+                    {scanning ? "Scanning…" : "Rescan"}
+                  </button>
+                </div>
+
+                {scanning ? (
+                  <div className="text-xs text-gray-600 py-3 text-center border border-gray-800 rounded-lg">
+                    Scanning local network…
+                  </div>
+                ) : routers.length === 0 ? (
+                  <div className="text-xs text-gray-600 py-3 text-center border border-gray-800 rounded-lg">
+                    No sessions found on local network
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {routers.map((r) => (
+                      <button
+                        key={r.zenoh_addr}
+                        onClick={() => selectRouter(r)}
+                        className={`w-full text-left px-3 py-2 rounded-lg border transition-colors ${
+                          selectedRouter?.zenoh_addr === r.zenoh_addr
+                            ? "border-zenoh-500 bg-zenoh-900/20"
+                            : "border-gray-700 hover:border-gray-600"
+                        }`}
+                      >
+                        <div className="text-sm font-medium text-gray-200">
+                          {r.session || r.cn || r.name}
+                        </div>
+                        <div className="text-xs text-gray-500 font-mono mt-0.5">
+                          {r.zenoh_addr}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <Field label="Admin username">
+                <input
+                  type="text"
+                  value={joinAdminCn}
+                  onChange={(e) => {
+                    setJoinAdminCn(e.target.value);
+                    setSelectedRouter(null);
+                  }}
+                  onKeyDown={handleKeyDown}
+                  className="input"
+                  placeholder="e.g. alice"
+                />
+              </Field>
+            </div>
           )}
         </div>
 
         {error && <p className="text-sm text-red-400">{error}</p>}
 
         <div className="flex gap-3">
-          <button
-            onClick={handleLogin}
-            disabled={working}
-            className="btn-primary flex-1"
-          >
+          <button onClick={handleLogin} disabled={working} className="btn-primary flex-1">
             {working ? "Signing in…" : "Sign in"}
           </button>
           <button onClick={onNavigateRegister} className="btn-secondary">
