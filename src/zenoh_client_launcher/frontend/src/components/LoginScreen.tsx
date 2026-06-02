@@ -105,25 +105,29 @@ export default function LoginScreen({
         </div>
 
         <div className="space-y-3">
-          <div className="flex gap-6">
-            <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
-              <input
-                type="radio"
-                checked={createSession}
-                onChange={() => setCreateSession(true)}
-                className="accent-zenoh-500"
-              />
-              Create new session
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
-              <input
-                type="radio"
-                checked={!createSession}
-                onChange={() => setCreateSession(false)}
-                className="accent-zenoh-500"
-              />
+          <div className="flex rounded-lg border border-gray-700 p-0.5 bg-gray-900">
+            <button
+              type="button"
+              onClick={() => setCreateSession(true)}
+              className={`flex-1 py-1.5 text-sm rounded-md transition-all duration-150 font-medium ${
+                createSession
+                  ? "bg-zenoh-600 text-white shadow-sm"
+                  : "text-gray-400 hover:text-gray-200"
+              }`}
+            >
+              Create session
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreateSession(false)}
+              className={`flex-1 py-1.5 text-sm rounded-md transition-all duration-150 font-medium ${
+                !createSession
+                  ? "bg-zenoh-600 text-white shadow-sm"
+                  : "text-gray-400 hover:text-gray-200"
+              }`}
+            >
               Join session
-            </label>
+            </button>
           </div>
 
           {!createSession && (
