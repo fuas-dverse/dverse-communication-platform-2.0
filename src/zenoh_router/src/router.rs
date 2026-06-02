@@ -6,6 +6,7 @@ use anyhow::Result;
 use bot_framework::announce::AgentAnnounce;
 use bot_framework::cert;
 use bot_framework::config::{DverseConfig, SessionRole};
+use crate::state::SessionCryptoState;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 use zenoh::Session;
@@ -50,10 +51,15 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
             // the GUI shows the badge immediately and DNS-SD includes session=
             // in its first announcement.
             let session_id = cfg.session_id();
+            let is_admin = matches!(cfg.session_role, SessionRole::Admin);
             {
                 let mut s = state.lock().unwrap();
                 s.session_role = cfg.session_role.clone();
                 s.session_id = session_id.clone();
+                // Mint vodozemac state for this session: identity for everyone,
+                // group sender only for the admin. Clients get a `GroupSender`
+                // installed when their `Allow` lands (see admission handler).
+                s.crypto = Some(SessionCryptoState::new(is_admin));
             }
 
             // Publish DNS-SD service record and start peer browsing once, on first config.
@@ -183,8 +189,95 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
             }
         };
 
-        state.lock().unwrap().router_status = RouterStatus::Running;
+        {
+            let mut st = state.lock().unwrap();
+            st.router_status = RouterStatus::Running;
+            st.zenoh_session = Some(session.clone());
+        }
         info!(zid = %session.zid(), "router session running");
+
+        // Admission control plane: handles incoming JoinRequests (admin) and
+        // AdmissionDecisions (requester) for the lifetime of this Zenoh
+        // session. Aborted on session restart so it doesn't outlive its
+        // Session handle.
+        let admission_handle = {
+            let s = session.clone();
+            let st = Arc::clone(&state);
+            let cn = operator_cn.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::admission_handler::run(s, st, cn).await {
+                    warn!(error = %e, "admission control plane exited");
+                }
+            })
+        };
+
+        // Client role: auto-(re)send a JoinRequest. We republish on TWO
+        // schedules so the request can't get stuck in dead air:
+        //   (a) Every time we enter Running (session restart, ACL reload).
+        //   (b) Periodically while still Pending — covers the case where
+        //       a peer link comes up *during* a session (e.g. inbound from
+        //       the admin's router) and our original put landed before
+        //       routes existed for it.
+        // Stops on terminal states (Allowed = we have the Megolm key;
+        // Denied = no point retrying).
+        use crate::state::JoinFlowStatus;
+        let mut republish_handle: Option<tokio::task::JoinHandle<()>> = None;
+        if let SessionRole::Client { admin_cn } = &cfg.session_role {
+            if !admin_cn.is_empty() {
+                let needs_request = !matches!(
+                    state.lock().unwrap().join_flow,
+                    Some(JoinFlowStatus::Allowed) | Some(JoinFlowStatus::Denied { .. })
+                );
+                if needs_request {
+                    if let Err(e) = crate::admission_handler::request_join(
+                        &session,
+                        &*state,
+                        &operator_cn,
+                        admin_cn,
+                        &cert_p,
+                        &key_p,
+                        None,
+                    )
+                    .await
+                    {
+                        warn!(error = %e, "auto JoinRequest failed");
+                    }
+                }
+
+                // Periodic republish task. Holds clones of session + state
+                // and re-puts the JoinRequest every few seconds until we
+                // reach a terminal state. Aborted on session restart so the
+                // next loop iteration spawns a fresh one against the new
+                // session.
+                let s = session.clone();
+                let st = Arc::clone(&state);
+                let my_cn = operator_cn.clone();
+                let admin_cn = admin_cn.clone();
+                let cert_p = cert_p.clone();
+                let key_p = key_p.clone();
+                republish_handle = Some(tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(3)).await;
+                        let terminal = matches!(
+                            st.lock().unwrap().join_flow,
+                            Some(JoinFlowStatus::Allowed)
+                                | Some(JoinFlowStatus::Denied { .. })
+                                | None
+                        );
+                        if terminal {
+                            break;
+                        }
+                        if let Err(e) = crate::admission_handler::request_join(
+                            &s, &*st, &my_cn, &admin_cn, &cert_p, &key_p, None,
+                        )
+                        .await
+                        {
+                            warn!(error = %e, "periodic republish of JoinRequest failed");
+                        }
+                    }
+                }));
+            }
+        }
 
         // Wall-clock stale-eviction task — spawned once.  Drives the
         // Online→Degraded→Offline ladder and removes agents whose heartbeats
@@ -215,6 +308,11 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
             warn!(error = %e, "session loop errored");
         }
 
+        admission_handle.abort();
+        if let Some(h) = republish_handle.take() {
+            h.abort();
+        }
+        state.lock().unwrap().zenoh_session = None;
         let _ = session.close().await;
 
         state.lock().unwrap().router_status = RouterStatus::Reloading;
@@ -241,13 +339,13 @@ async fn acquire_or_reuse(
     }
 }
 
-/// Subscribe to node announce messages; auto-admit any node with a valid cert
-/// and feed the JSON payload into the agent inventory.  Returns when the
-/// admitted list or peer set changes (triggering a session restart).
+/// Subscribe to node announce messages and feed the JSON payload into the
+/// agent inventory.  Returns when the admitted list (driven by the explicit
+/// admission flow — issue #110) or the peer set changes (triggering a
+/// session restart).
 ///
 /// Each announce key looks like `dverse/nodes/announce/<cn>/agents/<name>`
-/// which stays inside the existing `dverse/nodes/announce/**` ACL rule, so
-/// no ACL change is needed.
+/// which stays inside the existing `dverse/nodes/announce/**` ACL rule.
 async fn session_loop(
     session: &Session,
     state: Arc<Mutex<AppState>>,
@@ -257,6 +355,8 @@ async fn session_loop(
         .declare_subscriber("dverse/nodes/announce/**")
         .await
         .map_err(|e| anyhow::anyhow!("declare_subscriber: {e}"))?;
+
+    let admitted_changed = state.lock().unwrap().admitted_changed.clone();
 
     // Mark current peer set as seen so the first .changed() fires only on a real change.
     peer_rx.borrow_and_update();
@@ -291,26 +391,17 @@ async fn session_loop(
                         let cn = ann.cn.clone();
                         if cn.is_empty() { continue; }
                         let now = Instant::now();
-                        let needs_restart = {
-                            let mut st = state.lock().unwrap();
-                            // 1. Agent inventory — never triggers restart.
-                            st.upsert_agent(&ann, now);
-                            // 2. Auto-admit — triggers restart so the new CN
-                            // lands in the rebuilt ACL.
-                            if !st.admitted.contains(&cn) {
-                                st.admitted.push(cn.clone());
-                                true
-                            } else {
-                                false
-                            }
-                        };
-                        if needs_restart {
-                            info!(cn = %cn, "auto-admitted CN");
-                            return Ok(());
-                        }
+                        // Agent inventory only — admission is now explicit (#110).
+                        // Receiving a heartbeat from an unadmitted CN updates the
+                        // GUI but does NOT grant them session access.
+                        state.lock().unwrap().upsert_agent(&ann, now);
                     }
                     Err(e) => return Err(anyhow::anyhow!("subscriber recv: {e}")),
                 }
+            }
+            _ = admitted_changed.notified() => {
+                info!("admitted list changed, reloading router");
+                return Ok(());
             }
             Ok(()) = peer_rx.changed() => {
                 info!("peer set changed, reloading router");
@@ -358,6 +449,12 @@ fn build_zenoh_config(
 }
 
 fn build_acl_json(admitted: &[String], namespace: &str) -> String {
+    // TODO(#112): once agent payloads are AEAD-wrapped end-to-end, liberalize
+    // the main-rule to allow `dverse/**` for `any` cert holder (the plan's
+    // stated security model: crypto = membership, ACL = fabric). Until then
+    // we keep CN allow-listing so non-members can't even publish on the
+    // payload plane, even though they couldn't read it anyway.
+    //
     // Zenoh applies the session namespace at the face boundary and the ACL
     // interceptor sees the *namespaced* key, so the rule key_exprs must carry
     // the same prefix the namespace adds.
@@ -367,9 +464,22 @@ fn build_acl_json(admitted: &[String], namespace: &str) -> String {
         format!("{namespace}/")
     };
     let announce_key = format!("{prefix}dverse/nodes/announce/**");
+    let session_key = format!("{prefix}dverse/session/**");
     let main_key = format!("{prefix}dverse/**");
     let announce_msgs = serde_json::json!(["put", "delete", "declare_subscriber"]);
     let main_msgs = serde_json::json!(["put", "delete", "declare_subscriber", "query", "reply", "declare_queryable"]);
+    // session-rule (admission control plane): allow ANY cert holder to
+    // pub/sub on `dverse/session/**`. A requester isn't in `admitted` when
+    // they send their first `JoinRequest`, and the admin's reply is sealed
+    // by Olm to the requester — so security on this topic comes from crypto,
+    // not from CN allow-listing (issue #110).
+    let session_rule = serde_json::json!({
+        "id": "session-rule",
+        "messages": main_msgs,
+        "flows": ["ingress", "egress"],
+        "permission": "allow",
+        "key_exprs": [session_key]
+    });
 
     if admitted.is_empty() {
         serde_json::json!({
@@ -382,13 +492,14 @@ fn build_acl_json(admitted: &[String], namespace: &str) -> String {
                     "flows": ["ingress", "egress"],
                     "permission": "allow",
                     "key_exprs": [announce_key]
-                }
+                },
+                session_rule
             ],
             "subjects": [
                 { "id": "any" }
             ],
             "policies": [
-                { "rules": ["announce-rule"], "subjects": ["any"] }
+                { "rules": ["announce-rule", "session-rule"], "subjects": ["any"] }
             ]
         })
         .to_string()
@@ -404,6 +515,7 @@ fn build_acl_json(admitted: &[String], namespace: &str) -> String {
                     "permission": "allow",
                     "key_exprs": [announce_key]
                 },
+                session_rule,
                 {
                     "id": "main-rule",
                     "messages": main_msgs,
@@ -417,7 +529,7 @@ fn build_acl_json(admitted: &[String], namespace: &str) -> String {
                 { "id": "admitted", "cert_common_names": admitted }
             ],
             "policies": [
-                { "rules": ["announce-rule"], "subjects": ["any"] },
+                { "rules": ["announce-rule", "session-rule"], "subjects": ["any"] },
                 { "rules": ["main-rule"], "subjects": ["admitted"] }
             ]
         })

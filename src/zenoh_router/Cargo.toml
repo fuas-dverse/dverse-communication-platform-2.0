@@ -21,9 +21,11 @@ egui-gui = ["dep:eframe", "dep:egui"]
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
 bot-framework = { path = "../bot_framework" }
 clap = { version = "4", features = ["derive"] }
 dirs = "5"
+serde = { version = "1", features = ["derive"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 serde_json = "1"
 # eframe default features include `accesskit` which pulls in zbus +
@@ -59,3 +61,6 @@ mdns-sd = "0.13"
 if-addrs = "0.13"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+rcgen = "0.13"

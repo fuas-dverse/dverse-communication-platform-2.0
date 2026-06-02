@@ -6,8 +6,9 @@ use bot_framework::{
     cert,
     config::DverseConfig,
     node::NodeConfig,
+    payload_crypto::PayloadCipher,
 };
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 const NODE_NAME: &str = "ping";
 
@@ -56,18 +57,30 @@ async fn main() -> Result<()> {
         },
     );
 
+    // Per-process Megolm cipher. Each agent has its own outbound sender and
+    // discovers peers' session keys by polling `<cert_dir>/megolm/`. See
+    // `bot_framework::payload_crypto` for the carve-outs.
+    let crypto_dir = cfg.cert_dir.join("megolm");
+    let mut cipher = PayloadCipher::new(NODE_NAME, &crypto_dir)?;
+    cipher.publish_session_key(&crypto_dir, NODE_NAME)?;
+
     let pong_sub = session
         .declare_subscriber("dverse/pong")
         .await
         .map_err(|e| anyhow::anyhow!("declare_subscriber: {e}"))?;
 
     let mut seq: u64 = 0;
+    let mut refresh_tick = tokio::time::interval(Duration::from_secs(2));
     loop {
+        // Pick up any peer session keys written to the dir since the last loop.
+        let _ = cipher.refresh_receivers(&crypto_dir);
+
         seq += 1;
         let msg = format!("ping #{seq}");
-        info!(node = NODE_NAME, dir = "tx", payload = %msg, "sending");
+        let wire = cipher.encrypt(msg.as_bytes())?;
+        info!(node = NODE_NAME, dir = "tx", plaintext = %msg, wire_len = wire.len(), "sending (encrypted)");
         session
-            .put("dverse/ping", msg)
+            .put("dverse/ping", wire)
             .await
             .map_err(|e| anyhow::anyhow!("put: {e}"))?;
 
@@ -75,8 +88,14 @@ async fn main() -> Result<()> {
             sample = pong_sub.recv_async() => {
                 match sample {
                     Ok(s) => {
-                        let payload = String::from_utf8_lossy(&s.payload().to_bytes()).into_owned();
-                        info!(node = NODE_NAME, dir = "rx", payload = %payload, "received");
+                        let bytes = s.payload().to_bytes();
+                        match cipher.decrypt(&bytes) {
+                            Ok(pt) => {
+                                let payload = String::from_utf8_lossy(&pt).into_owned();
+                                info!(node = NODE_NAME, dir = "rx", payload = %payload, "received (decrypted)");
+                            }
+                            Err(e) => warn!(node = NODE_NAME, error = %e, "received undecryptable pong (likely missing peer key — refresh pending)"),
+                        }
                     }
                     Err(e) => {
                         error!(error = %e, "pong subscriber recv error");
@@ -87,6 +106,7 @@ async fn main() -> Result<()> {
             _ = tokio::time::sleep(Duration::from_secs(2)) => {
                 info!(node = NODE_NAME, "no pong within timeout");
             }
+            _ = refresh_tick.tick() => {}
         }
 
         tokio::time::sleep(Duration::from_secs(1)).await;

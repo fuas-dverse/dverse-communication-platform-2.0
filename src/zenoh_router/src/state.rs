@@ -1,8 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 use std::time::Instant;
 
+use bot_framework::admission::JoinRequest;
 use bot_framework::announce::{AgentAnnounce, AgentStatusWire};
 use bot_framework::config::{DverseConfig, SessionRole};
+use bot_framework::session_crypto::{
+    Curve25519PublicKey, GroupReceiver, GroupSender, SessionIdentity,
+};
+use tokio::sync::Notify;
 
 use crate::constants::{AGENT_DEGRADED_AFTER, AGENT_EVICT_AFTER, AGENT_OFFLINE_AFTER};
 
@@ -28,6 +34,84 @@ pub struct AppState {
     /// Admin CNs of sessions visible on the LAN, mirrored from DNS-SD browsing.
     /// Drives the session chooser; independent of which session we're in.
     pub visible_sessions: Vec<String>,
+    /// Vodozemac state for this router: identity, group sender (admin) /
+    /// receivers (clients), pending join requests, ban list. `None` until a
+    /// session config has been accepted.
+    pub crypto: Option<SessionCryptoState>,
+    /// Admin side: join requests received from `dverse/session/requests/**`
+    /// that have been crypto-verified (CN matches cert, binding signature
+    /// valid) and are awaiting an Allow/Deny click. Bans are dropped before
+    /// reaching this queue.
+    pub pending_requests: VecDeque<PendingRequest>,
+    /// Admin side, RAM-only (cleared on session end). Requesters in this set
+    /// have their `JoinRequest` silently dropped.
+    pub banned_cns: HashSet<String>,
+    /// Requester side: state of the most recent join request we issued,
+    /// `None` outside the join flow. The GUI bounces back to the chooser on
+    /// terminal states (Denied / Banned / Timeout).
+    pub join_flow: Option<JoinFlowStatus>,
+    /// "Session must restart" doorbell. The admission handler rings it after
+    /// pushing a new CN to `admitted`; `session_loop` `await`s `notified()`
+    /// and returns on a ring, triggering an ACL reload.
+    pub admitted_changed: Arc<Notify>,
+    /// The live Zenoh session, set after `zenoh::open` succeeds and cleared
+    /// before `session.close()`. Exposed so Tauri commands (admit/deny) can
+    /// publish without each task holding its own session handle.
+    pub zenoh_session: Option<zenoh::Session>,
+}
+
+/// Per-session crypto material. Lifetime = one Zenoh session as a member
+/// (created on session-config-accept; dropped/reset on session change).
+pub struct SessionCryptoState {
+    /// This node's vodozemac identity (Curve25519/Ed25519) — used to receive
+    /// pre-key Olm messages (admission grants) and to sign new ones.
+    pub identity: SessionIdentity,
+    /// The one-time key this node has published. Used by peers to seal an
+    /// Olm session to us. Re-rolled on each join attempt.
+    pub published_otk: Option<Curve25519PublicKey>,
+    /// Admin only: the outbound Megolm sender for this session. Its
+    /// `session_key` is what gets Olm-wrapped to each admitted member.
+    pub group_sender: Option<GroupSender>,
+    /// Inbound Megolm sessions keyed by `MegolmSession.session_id()` —
+    /// admitted clients hold the admin's sender; the admin holds its own.
+    pub group_receivers: HashMap<String, GroupReceiver>,
+}
+
+impl SessionCryptoState {
+    /// Mint a fresh identity. Admin role starts a group sender; clients
+    /// leave that `None` until they receive an admission Allow.
+    pub fn new(is_admin: bool) -> Self {
+        let mut identity = SessionIdentity::new();
+        let otks = identity.generate_one_time_keys(1);
+        let published_otk = otks.into_iter().next();
+        identity.mark_keys_as_published();
+        let group_sender = if is_admin { Some(GroupSender::new()) } else { None };
+        Self {
+            identity,
+            published_otk,
+            group_sender,
+            group_receivers: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingRequest {
+    pub request: JoinRequest,
+    pub received_at: Instant,
+}
+
+/// Requester-side state of the active join flow.
+#[derive(Debug, Clone)]
+pub enum JoinFlowStatus {
+    /// Request sent, awaiting an `AdmissionDecision`.
+    Pending { admin_cn: String, sent_at: Instant },
+    /// `Allow` received and Megolm key successfully unwrapped.
+    Allowed,
+    /// `Deny` received.
+    Denied { reason: Option<String> },
+    /// Local-only state when the request times out without an answer.
+    TimedOut,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -106,6 +190,12 @@ impl AppState {
             session_id,
             connected_nodes: HashMap::new(),
             visible_sessions: Vec::new(),
+            crypto: None,
+            pending_requests: VecDeque::new(),
+            banned_cns: HashSet::new(),
+            join_flow: None,
+            admitted_changed: Arc::new(Notify::new()),
+            zenoh_session: None,
         }
     }
 

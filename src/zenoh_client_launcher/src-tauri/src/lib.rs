@@ -67,8 +67,27 @@ pub struct NodeInfo {
 pub enum AppScreen {
     Login,
     Register,
+    Chooser,
+    RequestingJoin,
     Loading,
     Main,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum JoinFlowDto {
+    Pending { admin_cn: String },
+    Allowed,
+    Denied { reason: Option<String> },
+    TimedOut,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingRequestDto {
+    pub requester_cn: String,
+    pub note: Option<String>,
+    pub requested_at: String,
+    pub received_secs_ago: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +117,13 @@ pub struct AppSnapshot {
     pub connected_nodes: Vec<NodeInfo>,
     pub log: Vec<String>,
     pub error: Option<String>,
+    /// Admin CNs of sessions visible on the LAN (mirrored from mDNS).
+    /// Drives the chooser screen.
+    pub visible_sessions: Vec<String>,
+    /// Requester-side: state of the active join flow, if any.
+    pub join_flow: Option<JoinFlowDto>,
+    /// Admin-side: queued join requests awaiting Allow/Deny.
+    pub pending_requests: Vec<PendingRequestDto>,
 }
 
 // ── Status mappers (library types → serde DTOs) ───────────────────────────────
@@ -130,16 +156,22 @@ fn map_agent_status(s: zr::AgentStatus) -> AgentStatus {
 pub struct InnerState {
     pub screen: AppScreen,
     pub router: Arc<Mutex<zr::AppState>>,
+    /// Captured at `login` and consumed by `pick_session` when the user
+    /// settles on Create-or-Join in the Chooser. `None` outside of that gap.
+    pub staged_credentials: Option<(String, String)>,
 }
 
 impl InnerState {
     fn new(router: Arc<Mutex<zr::AppState>>) -> Self {
-        let screen = if DverseConfig::exists() {
-            AppScreen::Loading
-        } else {
-            AppScreen::Login
-        };
-        Self { screen, router }
+        // Sessions are runtime-only: always start at Login on every launch.
+        // We deliberately don't consult `DverseConfig::exists()` — any
+        // config file left on disk is overwritten by the next `pick_session`
+        // and otherwise ignored by the launcher.
+        Self {
+            screen: AppScreen::Login,
+            router,
+            staged_credentials: None,
+        }
     }
 
     fn snapshot(&self) -> AppSnapshot {
@@ -152,13 +184,25 @@ impl InnerState {
             _ => None,
         };
 
-        // Effective screen: stay on Login/Register until a session is staged,
-        // then follow the router's lifecycle. Frontend renders purely off this.
+        // Effective screen: stay on Login/Register/Chooser until a session
+        // is staged, then follow the router's lifecycle. For client role,
+        // override with RequestingJoin while we wait for an Allow.
+        let waiting_for_admission = matches!(
+            rs.join_flow,
+            Some(zr::JoinFlowStatus::Pending { .. })
+        );
         let screen = match self.screen {
             AppScreen::Login => AppScreen::Login,
             AppScreen::Register => AppScreen::Register,
+            AppScreen::Chooser => AppScreen::Chooser,
             _ => match rs.router_status {
-                zr::RouterStatus::Running => AppScreen::Main,
+                zr::RouterStatus::Running => {
+                    if waiting_for_admission {
+                        AppScreen::RequestingJoin
+                    } else {
+                        AppScreen::Main
+                    }
+                }
                 zr::RouterStatus::Error(_) => AppScreen::Login,
                 _ => AppScreen::Loading,
             },
@@ -189,6 +233,28 @@ impl InnerState {
             .collect();
         nodes.sort_by(|a, b| a.cn.cmp(&b.cn));
 
+        let join_flow = rs.join_flow.as_ref().map(|jf| match jf {
+            zr::JoinFlowStatus::Pending { admin_cn, .. } => {
+                JoinFlowDto::Pending { admin_cn: admin_cn.clone() }
+            }
+            zr::JoinFlowStatus::Allowed => JoinFlowDto::Allowed,
+            zr::JoinFlowStatus::Denied { reason } => {
+                JoinFlowDto::Denied { reason: reason.clone() }
+            }
+            zr::JoinFlowStatus::TimedOut => JoinFlowDto::TimedOut,
+        });
+
+        let pending_requests: Vec<PendingRequestDto> = rs
+            .pending_requests
+            .iter()
+            .map(|p| PendingRequestDto {
+                requester_cn: p.request.requester_cn.clone(),
+                note: p.request.note.clone(),
+                requested_at: p.request.requested_at.clone(),
+                received_secs_ago: now.saturating_duration_since(p.received_at).as_secs(),
+            })
+            .collect();
+
         AppSnapshot {
             screen,
             router_status,
@@ -197,6 +263,9 @@ impl InnerState {
             connected_nodes: nodes,
             log: rs.log.clone(),
             error,
+            visible_sessions: rs.visible_sessions.clone(),
+            join_flow,
+            pending_requests,
         }
     }
 }
@@ -245,16 +314,58 @@ fn get_state(state: State<'_, AppStateWrapper>) -> AppSnapshot {
     state.0.lock().unwrap().snapshot()
 }
 
+/// Admin action: accept a pending join request. Olm-wraps the Megolm session
+/// key to the requester, publishes the Allow, then bumps `admitted` (which
+/// restarts the session under a fresh ACL).
+#[tauri::command]
+async fn admit_request(
+    requester_cn: String,
+    state: State<'_, AppStateWrapper>,
+) -> Result<(), String> {
+    let (router, session) = {
+        let inner = state.0.lock().unwrap();
+        let r = inner.router.clone();
+        let s = r.lock().unwrap().zenoh_session.clone();
+        (r, s)
+    };
+    let session = session.ok_or("router not running")?;
+    zenoh_router::admission_handler::admit(&session, &*router, &requester_cn)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Admin action: deny a pending join request. Publishes a Deny and drops
+/// the row; does not touch `admitted`.
+#[tauri::command]
+async fn deny_request(
+    requester_cn: String,
+    reason: Option<String>,
+    state: State<'_, AppStateWrapper>,
+) -> Result<(), String> {
+    let (router, session) = {
+        let inner = state.0.lock().unwrap();
+        let r = inner.router.clone();
+        let s = r.lock().unwrap().zenoh_session.clone();
+        (r, s)
+    };
+    let session = session.ok_or("router not running")?;
+    zenoh_router::admission_handler::deny(&session, &*router, &requester_cn, reason)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // ── Commands: auth ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 pub struct LoginPayload {
     pub username: String,
     pub password: String,
-    pub create_session: bool,
-    pub join_admin_cn: String,
 }
 
+/// Credentials-only login. We don't know the user's session role yet — that's
+/// the Chooser's job (issue #110). Stages the credentials and routes the GUI
+/// to the Chooser; `pick_session` is what eventually builds + saves the
+/// `DverseConfig` and starts the router.
 #[tauri::command]
 async fn login(
     payload: LoginPayload,
@@ -266,15 +377,45 @@ async fn login(
     if payload.password.is_empty() {
         return Err("Password is required.".into());
     }
+    let mut st = state.0.lock().unwrap();
+    st.staged_credentials = Some((payload.username.clone(), payload.password.clone()));
+    st.screen = AppScreen::Chooser;
+    info!(username = %payload.username, "login: credentials staged, routing to Chooser");
+    Ok(())
+}
 
-    let session_role = if payload.create_session {
-        SessionRole::Admin
-    } else {
-        let admin_cn = payload.join_admin_cn.trim().to_string();
-        if admin_cn.is_empty() {
-            return Err("Admin username is required to join a session.".into());
+#[derive(Debug, Deserialize)]
+pub struct PickSessionPayload {
+    /// `None` → create a new session (this user becomes the admin).
+    /// `Some(cn)` → request to join the session hosted by `cn`.
+    pub admin_cn: Option<String>,
+}
+
+/// Chooser action: consume the staged credentials, build the `DverseConfig`
+/// with the chosen role, save it, and stage it on the embedded router.
+/// The router boots; for `Client` roles, the admission handler then
+/// auto-publishes a `JoinRequest` once the session is `Running`.
+#[tauri::command]
+async fn pick_session(
+    payload: PickSessionPayload,
+    state: State<'_, AppStateWrapper>,
+) -> Result<(), String> {
+    let (username, password) = {
+        let mut st = state.0.lock().unwrap();
+        st.staged_credentials
+            .take()
+            .ok_or_else(|| "no staged credentials — log in first".to_string())?
+    };
+
+    let session_role = match payload.admin_cn {
+        None => SessionRole::Admin,
+        Some(cn) => {
+            let trimmed = cn.trim().to_string();
+            if trimmed.is_empty() {
+                return Err("admin_cn was provided but empty".into());
+            }
+            SessionRole::Client { admin_cn: trimmed }
         }
-        SessionRole::Client { admin_cn }
     };
 
     let cert_dir = dirs::data_local_dir()
@@ -282,16 +423,12 @@ async fn login(
         .join("dverse")
         .join("certs");
 
-    let cn = payload
-        .username
-        .split('@')
-        .next()
-        .unwrap_or(&payload.username);
+    let cn = username.split('@').next().unwrap_or(&username);
     let router_endpoint = format!("tls/zenoh-{cn}.local:{ROUTER_PORT}");
 
     let cfg = DverseConfig {
-        username: payload.username.clone(),
-        password: payload.password.clone(),
+        username,
+        password,
         keycloak_url: KEYCLOAK_URL.into(),
         keycloak_realm: KEYCLOAK_REALM.into(),
         client_id: CLIENT_ID.into(),
@@ -303,11 +440,8 @@ async fn login(
         router_endpoint,
         session_role,
     };
-
     cfg.save().map_err(|e| e.to_string())?;
 
-    // Stage the config onto the embedded router's AppState; the router::run
-    // task (spawned once at startup) is waiting in Phase 1 and picks it up.
     let router = {
         let st = state.0.lock().unwrap();
         Arc::clone(&st.router)
@@ -316,7 +450,7 @@ async fn login(
         username = %cfg.username,
         session_id = %cfg.session_id(),
         role = ?cfg.session_role,
-        "login: staging session config for embedded router"
+        "pick_session: staging session config for embedded router"
     );
     {
         let mut r = router.lock().unwrap();
@@ -324,11 +458,7 @@ async fn login(
         r.session_id = cfg.session_id();
         r.staged_config = Some(cfg);
     }
-    {
-        let mut st = state.0.lock().unwrap();
-        st.screen = AppScreen::Loading;
-    }
-
+    state.0.lock().unwrap().screen = AppScreen::Loading;
     Ok(())
 }
 
@@ -491,7 +621,19 @@ async fn discover_routers() -> Result<Vec<DiscoveredRouter>, String> {
                     continue;
                 }
                 let port = info.get_port();
-                let name = info.get_fullname().to_string();
+                // Use the `cn` TXT field, NOT the mDNS fullname — the fullname
+                // (e.g. "DVerse (test3)._dverse._tcp.local.") is what's *under*
+                // the bonnet of mDNS, but admin_cn must be just the operator
+                // CN ("test3"), because the chooser hands this value to
+                // `pick_session(admin_cn = ...)` which becomes
+                // `SessionRole::Client { admin_cn }` and `cfg.session_id()`.
+                // Falls back to the fullname only so a missing TXT field
+                // doesn't silently drop the row from the chooser.
+                let name = info
+                    .get_property("cn")
+                    .map(|p| p.val_str().to_string())
+                    .filter(|s: &String| !s.is_empty())
+                    .unwrap_or_else(|| info.get_fullname().to_string());
                 let zenoh_addr = format!("tcp/{host}:{port}");
                 routers.insert(
                     zenoh_addr.clone(),
@@ -618,11 +760,11 @@ pub fn run() {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
     let _guard = rt.enter();
     
-    // The embedded router's AppState. If a config already exists it's loaded as
-    // `staged_config`, so router::run proceeds immediately; otherwise it waits
-    // in Phase 1 until `login` stages one.
-    let existing_config = DverseConfig::load().ok();
-    let router_state = Arc::new(Mutex::new(zr::AppState::new(existing_config)));
+    // Sessions are runtime-only: never auto-resume from a persisted config.
+    // The embedded router waits in Phase 1 until `pick_session` stages a
+    // fresh config; any leftover `~/.config/dverse/config.toml` from a
+    // prior run is ignored (and overwritten on the next pick).
+    let router_state = Arc::new(Mutex::new(zr::AppState::new(None)));
     // Route tracing events (router, discovery, cert) into AppState.log so the
     // GUI log panel and LoadingScreen show real progress.
     zenoh_router::logging::init_with_gui_sink(Arc::clone(&router_state));
@@ -653,6 +795,9 @@ pub fn run() {
             start_bot,
             stop_bot,
             get_bot_statuses,
+            admit_request,
+            deny_request,
+            pick_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

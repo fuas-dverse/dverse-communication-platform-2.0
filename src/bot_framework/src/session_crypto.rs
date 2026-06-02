@@ -27,10 +27,15 @@ use p256::ecdsa::signature::{Signer, Verifier};
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use p256::pkcs8::DecodePrivateKey;
 use vodozemac::megolm::{
-    GroupSession, InboundGroupSession, MegolmMessage, SessionConfig as MegolmConfig, SessionKey,
+    GroupSession, InboundGroupSession, SessionConfig as MegolmConfig,
 };
-use vodozemac::olm::{Account, OlmMessage, Session, SessionConfig};
-use vodozemac::Curve25519PublicKey;
+use vodozemac::olm::{Account, Session, SessionConfig};
+
+// Re-exports so downstream crates (zenoh_router, Tauri) can name the wire
+// types without taking a direct dep on vodozemac.
+pub use vodozemac::megolm::{MegolmMessage, SessionKey};
+pub use vodozemac::olm::OlmMessage;
+pub use vodozemac::Curve25519PublicKey;
 use x509_parser::prelude::*;
 
 // ── Node identity (vodozemac Account) ─────────────────────────────────────────
@@ -165,6 +170,12 @@ impl GroupReceiver {
         Self { inner: InboundGroupSession::new(key, MegolmConfig::version_1()) }
     }
 
+    /// The sender's Megolm session id — used by [`crate::payload_crypto`] to
+    /// look up the right receiver for an incoming wire payload.
+    pub fn session_id(&self) -> String {
+        self.inner.session_id()
+    }
+
     pub fn decrypt(&mut self, message: &MegolmMessage) -> Result<Vec<u8>> {
         self.inner
             .decrypt(message)
@@ -205,6 +216,21 @@ pub fn sign_enc_binding(
 ) -> Result<EncKeyBinding> {
     let sk = SigningKey::from_pkcs8_der(tls_key_pkcs8_der)
         .map_err(|e| anyhow!("parse TLS key: {e}"))?;
+    let key_bytes = curve25519_key.to_bytes();
+    let sig: Signature = sk.sign(&binding_message(cn, &key_bytes));
+    Ok(EncKeyBinding { cn: cn.to_string(), curve25519_key: key_bytes, signature: sig.to_bytes().to_vec() })
+}
+
+/// PEM variant of [`sign_enc_binding`] — `<node>.key` on disk is PKCS#8 PEM
+/// (rcgen's default), and stepping through DER conversion at call sites is
+/// noise.
+pub fn sign_enc_binding_pem(
+    tls_key_pem: &str,
+    cn: &str,
+    curve25519_key: &Curve25519PublicKey,
+) -> Result<EncKeyBinding> {
+    let sk = SigningKey::from_pkcs8_pem(tls_key_pem)
+        .map_err(|e| anyhow!("parse TLS key PEM: {e}"))?;
     let key_bytes = curve25519_key.to_bytes();
     let sig: Signature = sk.sign(&binding_message(cn, &key_bytes));
     Ok(EncKeyBinding { cn: cn.to_string(), curve25519_key: key_bytes, signature: sig.to_bytes().to_vec() })

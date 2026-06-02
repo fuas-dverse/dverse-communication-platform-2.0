@@ -8,6 +8,7 @@
 //! The egui desktop GUI ([`gui`]) lives behind the `egui-gui` feature so the
 //! library doesn't pull eframe/egui into embedders that supply their own UI.
 
+pub mod admission_handler;
 pub mod constants;
 pub mod discovery;
 pub mod logging;

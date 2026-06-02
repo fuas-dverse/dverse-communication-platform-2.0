@@ -6,8 +6,9 @@ use bot_framework::{
     cert,
     config::DverseConfig,
     node::NodeConfig,
+    payload_crypto::PayloadCipher,
 };
-use tracing::info;
+use tracing::{info, warn};
 
 const NODE_NAME: &str = "pong";
 
@@ -56,24 +57,48 @@ async fn main() -> Result<()> {
         },
     );
 
+    let crypto_dir = cfg.cert_dir.join("megolm");
+    let mut cipher = PayloadCipher::new(NODE_NAME, &crypto_dir)?;
+    cipher.publish_session_key(&crypto_dir, NODE_NAME)?;
+
     let ping_sub = session
         .declare_subscriber("dverse/ping")
         .await
         .map_err(|e| anyhow::anyhow!("declare_subscriber: {e}"))?;
 
-    info!(node = NODE_NAME, "listening for pings");
-    while let Ok(sample) = ping_sub.recv_async().await {
-        let payload = String::from_utf8_lossy(&sample.payload().to_bytes()).into_owned();
-        info!(node = NODE_NAME, dir = "rx", payload = %payload, "received");
+    info!(node = NODE_NAME, "listening for pings (encrypted)");
+    let mut refresh_tick = tokio::time::interval(Duration::from_secs(2));
+    loop {
+        tokio::select! {
+            sample = ping_sub.recv_async() => {
+                let sample = match sample {
+                    Ok(s) => s,
+                    Err(_) => break,
+                };
+                let bytes = sample.payload().to_bytes();
+                let payload = match cipher.decrypt(&bytes) {
+                    Ok(pt) => String::from_utf8_lossy(&pt).into_owned(),
+                    Err(e) => {
+                        warn!(node = NODE_NAME, error = %e, "dropped undecryptable ping (peer key not yet installed)");
+                        continue;
+                    }
+                };
+                info!(node = NODE_NAME, dir = "rx", payload = %payload, "received (decrypted)");
 
-        let reply = format!("pong (echoing: {payload})");
-        info!(node = NODE_NAME, dir = "tx", payload = %reply, "sending");
-        session
-            .put("dverse/pong", reply)
-            .await
-            .map_err(|e| anyhow::anyhow!("put: {e}"))?;
+                let reply = format!("pong (echoing: {payload})");
+                let wire = cipher.encrypt(reply.as_bytes())?;
+                info!(node = NODE_NAME, dir = "tx", plaintext = %reply, wire_len = wire.len(), "sending (encrypted)");
+                session
+                    .put("dverse/pong", wire)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("put: {e}"))?;
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            _ = refresh_tick.tick() => {
+                let _ = cipher.refresh_receivers(&crypto_dir);
+            }
+        }
     }
 
     Ok(())
