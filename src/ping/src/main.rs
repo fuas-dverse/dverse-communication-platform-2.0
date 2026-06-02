@@ -1,3 +1,4 @@
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -6,7 +7,7 @@ use bot_framework::{
     cert,
     config::DverseConfig,
     node::NodeConfig,
-    payload_crypto::PayloadCipher,
+    payload_crypto::{self, PayloadCipher},
 };
 use tracing::{error, info, warn};
 
@@ -57,12 +58,20 @@ async fn main() -> Result<()> {
         },
     );
 
-    // Per-process Megolm cipher. Each agent has its own outbound sender and
-    // discovers peers' session keys by polling `<cert_dir>/megolm/`. See
-    // `bot_framework::payload_crypto` for the carve-outs.
+    // Per-process Megolm cipher. Each agent owns its outbound sender and
+    // discovers peers' session keys via two parallel mechanisms:
+    //   1. `<cert_dir>/megolm/` filesystem (instant, same-machine only).
+    //   2. Zenoh-side relay on `dverse/agent_keys/**` (covers cross-machine).
+    // The cipher is shared with the relay's background tasks, hence Arc<Mutex>.
     let crypto_dir = cfg.cert_dir.join("megolm");
-    let mut cipher = PayloadCipher::new(NODE_NAME, &crypto_dir)?;
-    cipher.publish_session_key(&crypto_dir, NODE_NAME)?;
+    let cipher = Arc::new(Mutex::new(PayloadCipher::new(NODE_NAME, &crypto_dir)?));
+    cipher.lock().unwrap().publish_session_key(&crypto_dir, NODE_NAME)?;
+    payload_crypto::spawn_agent_key_relay(
+        Arc::clone(&cipher),
+        session.clone(),
+        cn.to_string(),
+        NODE_NAME.to_string(),
+    );
 
     let pong_sub = session
         .declare_subscriber("dverse/pong")
@@ -73,11 +82,11 @@ async fn main() -> Result<()> {
     let mut refresh_tick = tokio::time::interval(Duration::from_secs(2));
     loop {
         // Pick up any peer session keys written to the dir since the last loop.
-        let _ = cipher.refresh_receivers(&crypto_dir);
+        let _ = cipher.lock().unwrap().refresh_receivers(&crypto_dir);
 
         seq += 1;
         let msg = format!("ping #{seq}");
-        let wire = cipher.encrypt(msg.as_bytes())?;
+        let wire = cipher.lock().unwrap().encrypt(msg.as_bytes())?;
         info!(node = NODE_NAME, dir = "tx", plaintext = %msg, wire_len = wire.len(), "sending (encrypted)");
         session
             .put("dverse/ping", wire)
@@ -89,7 +98,8 @@ async fn main() -> Result<()> {
                 match sample {
                     Ok(s) => {
                         let bytes = s.payload().to_bytes();
-                        match cipher.decrypt(&bytes) {
+                        let decrypted = cipher.lock().unwrap().decrypt(&bytes);
+                        match decrypted {
                             Ok(pt) => {
                                 let payload = String::from_utf8_lossy(&pt).into_owned();
                                 info!(node = NODE_NAME, dir = "rx", payload = %payload, "received (decrypted)");

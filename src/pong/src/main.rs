@@ -1,3 +1,4 @@
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -6,7 +7,7 @@ use bot_framework::{
     cert,
     config::DverseConfig,
     node::NodeConfig,
-    payload_crypto::PayloadCipher,
+    payload_crypto::{self, PayloadCipher},
 };
 use tracing::{info, warn};
 
@@ -57,9 +58,17 @@ async fn main() -> Result<()> {
         },
     );
 
+    // See ping/main.rs for the full rationale: per-process Megolm sender,
+    // filesystem + wire relay for peer-key discovery.
     let crypto_dir = cfg.cert_dir.join("megolm");
-    let mut cipher = PayloadCipher::new(NODE_NAME, &crypto_dir)?;
-    cipher.publish_session_key(&crypto_dir, NODE_NAME)?;
+    let cipher = Arc::new(Mutex::new(PayloadCipher::new(NODE_NAME, &crypto_dir)?));
+    cipher.lock().unwrap().publish_session_key(&crypto_dir, NODE_NAME)?;
+    payload_crypto::spawn_agent_key_relay(
+        Arc::clone(&cipher),
+        session.clone(),
+        cn.to_string(),
+        NODE_NAME.to_string(),
+    );
 
     let ping_sub = session
         .declare_subscriber("dverse/ping")
@@ -76,7 +85,8 @@ async fn main() -> Result<()> {
                     Err(_) => break,
                 };
                 let bytes = sample.payload().to_bytes();
-                let payload = match cipher.decrypt(&bytes) {
+                let decrypted = cipher.lock().unwrap().decrypt(&bytes);
+                let payload = match decrypted {
                     Ok(pt) => String::from_utf8_lossy(&pt).into_owned(),
                     Err(e) => {
                         warn!(node = NODE_NAME, error = %e, "dropped undecryptable ping (peer key not yet installed)");
@@ -86,7 +96,7 @@ async fn main() -> Result<()> {
                 info!(node = NODE_NAME, dir = "rx", payload = %payload, "received (decrypted)");
 
                 let reply = format!("pong (echoing: {payload})");
-                let wire = cipher.encrypt(reply.as_bytes())?;
+                let wire = cipher.lock().unwrap().encrypt(reply.as_bytes())?;
                 info!(node = NODE_NAME, dir = "tx", plaintext = %reply, wire_len = wire.len(), "sending (encrypted)");
                 session
                     .put("dverse/pong", wire)
@@ -96,7 +106,7 @@ async fn main() -> Result<()> {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             _ = refresh_tick.tick() => {
-                let _ = cipher.refresh_receivers(&crypto_dir);
+                let _ = cipher.lock().unwrap().refresh_receivers(&crypto_dir);
             }
         }
     }

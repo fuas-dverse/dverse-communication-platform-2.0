@@ -15,13 +15,16 @@
 //!   base64 to `dir/<my_id>.sender.b64`. Other agents read every
 //!   `*.sender.b64` in the directory and install matching receivers.
 //!
-//! # Scope (issue #110 carve-out follow-up)
+//! # Cross-machine key exchange
 //!
 //! Same-operator agents share `cert_dir/megolm/` and can exchange keys via
-//! the filesystem. **Cross-machine** key exchange (agents on different
-//! operators) is not implemented here — that requires the operator to relay
-//! agent session keys via Olm to admitted members. Documented as a
-//! follow-up; the demo target is local ping↔pong.
+//! the filesystem ([`refresh_receivers`](PayloadCipher::refresh_receivers)).
+//! Cross-operator agents use the Zenoh-side relay
+//! ([`spawn_agent_key_relay`]): each agent publishes its own `SessionKey`
+//! on `dverse/agent_keys/<cn>/<agent_name>` and subscribes to the same
+//! key-expr to install peers'. That topic falls under the admitted-only
+//! main ACL rule, so non-admitted nodes on the fabric can't read it.
+//! Periodic re-publish (every 5 s) lets late joiners catch up.
 //!
 //! # Wire format
 //!
@@ -38,14 +41,28 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
+use zenoh::Session;
 
 use crate::session_crypto::{GroupReceiver, GroupSender, MegolmMessage, SessionKey};
 
 const SENDER_FILE_SUFFIX: &str = ".sender.b64";
+/// How often each agent re-publishes its session key on the wire. The key
+/// never changes within a process lifetime, so re-puts are idempotent — this
+/// is just how long a fresh joiner has to wait before existing agents'
+/// keys reach it.
+const AGENT_KEY_REPUBLISH_INTERVAL: Duration = Duration::from_secs(5);
+/// Topic prefix for the cross-machine agent-key relay. Falls under the
+/// router's main-rule ACL (`dverse/**` allowed only for admitted CNs), so
+/// non-admitted nodes can't read these keys even though they're on the
+/// same Zenoh fabric.
+const AGENT_KEYS_TOPIC_PREFIX: &str = "dverse/agent_keys";
+const AGENT_KEYS_SUBSCRIBE_EXPR: &str = "dverse/agent_keys/**";
 
 /// One AEAD-protected payload on the wire. The `sender_id` lets the receiver
 /// dispatch to the right [`GroupReceiver`] in O(1).
@@ -219,6 +236,140 @@ impl PayloadCipher {
         );
         Ok(plaintext)
     }
+
+    /// The exported `SessionKey` of our outbound sender, base64. Distributable
+    /// to peers via the [`spawn_agent_key_relay`] wire bus so they can install
+    /// a [`GroupReceiver`] for us.
+    pub fn my_session_key_b64(&self) -> String {
+        self.sender.session_key().to_base64()
+    }
+
+    /// Install a peer's session key from a base64 string (programmatic
+    /// alternative to [`refresh_receivers`](Self::refresh_receivers), which
+    /// scans a directory). Returns `true` when a new receiver was installed,
+    /// `false` if it was our own session_id or already installed.
+    pub fn install_peer_session_key(&mut self, key_b64: &str) -> Result<bool> {
+        let key = SessionKey::from_base64(key_b64.trim())
+            .map_err(|e| anyhow!("parse session key: {e}"))?;
+        let receiver = GroupReceiver::new(&key);
+        let sid = receiver.session_id();
+        if sid == self.sender.session_id() {
+            return Ok(false);
+        }
+        if self.receivers.contains_key(&sid) {
+            return Ok(false);
+        }
+        self.receivers.insert(sid.clone(), receiver);
+        info!(
+            cipher = "megolm",
+            label = %self.label,
+            peer_session_id = %sid,
+            "installed inbound receiver from wire announce"
+        );
+        Ok(true)
+    }
+}
+
+// ── Wire bus for cross-machine peer-key exchange ────────────────────────────
+
+/// JSON envelope put on `dverse/agent_keys/<cn>/<agent_name>`. Sender's
+/// `SessionKey` exported as base64; the receiving agent reconstructs a
+/// [`GroupReceiver`] from it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AgentKeyAnnounce {
+    session_key_b64: String,
+}
+
+/// Spawn two background tokio tasks that relay peer session keys via Zenoh,
+/// closing the cross-machine gap left by the filesystem-only mechanism:
+///
+/// 1. **Announce** — every [`AGENT_KEY_REPUBLISH_INTERVAL`], put our outbound
+///    `SessionKey` on `dverse/agent_keys/<cn>/<agent_name>`. Late joiners
+///    get covered by the next tick. Idempotent: the key never changes.
+/// 2. **Subscribe** — declare a subscriber on `dverse/agent_keys/**` and
+///    feed each received envelope into
+///    [`PayloadCipher::install_peer_session_key`].
+///
+/// The topic falls under the router's main ACL rule (allow-only-for-
+/// admitted-CNs on `dverse/**`), so non-admitted nodes can't read it.
+///
+/// The tasks live for the process lifetime; on Zenoh errors they log and
+/// exit (the next process start re-launches them).
+pub fn spawn_agent_key_relay(
+    cipher: Arc<Mutex<PayloadCipher>>,
+    session: Session,
+    cn: String,
+    agent_name: String,
+) {
+    // Announce task.
+    {
+        let topic = format!("{}/{}/{}", AGENT_KEYS_TOPIC_PREFIX, cn, agent_name);
+        let sess = session.clone();
+        let cip = Arc::clone(&cipher);
+        let label = agent_name.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(AGENT_KEY_REPUBLISH_INTERVAL);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                let envelope = {
+                    let c = cip.lock().unwrap();
+                    AgentKeyAnnounce { session_key_b64: c.my_session_key_b64() }
+                };
+                let bytes = match serde_json::to_vec(&envelope) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        warn!(error = %e, "serialize AgentKeyAnnounce");
+                        continue;
+                    }
+                };
+                if let Err(e) = sess.put(&topic, bytes).await {
+                    warn!(
+                        cipher = "megolm",
+                        label = %label,
+                        error = %e,
+                        "agent_keys republish failed, stopping relay announce task"
+                    );
+                    break;
+                }
+            }
+        });
+    }
+
+    // Subscribe task.
+    tokio::spawn(async move {
+        let sub = match session.declare_subscriber(AGENT_KEYS_SUBSCRIBE_EXPR).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "agent_keys subscriber failed to start");
+                return;
+            }
+        };
+        loop {
+            let sample = match sub.recv_async().await {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(error = %e, "agent_keys subscriber recv error, stopping");
+                    break;
+                }
+            };
+            let bytes = sample.payload().to_bytes();
+            let envelope: AgentKeyAnnounce = match serde_json::from_slice(&bytes) {
+                Ok(e) => e,
+                Err(e) => {
+                    warn!(error = %e, "ignored malformed AgentKeyAnnounce");
+                    continue;
+                }
+            };
+            if let Err(e) = cipher
+                .lock()
+                .unwrap()
+                .install_peer_session_key(&envelope.session_key_b64)
+            {
+                warn!(error = %e, "ignored malformed peer session key");
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -249,6 +400,43 @@ mod tests {
         let ct = bob.encrypt(b"hi alice").unwrap();
         let pt = alice.decrypt(&ct).expect("alice decrypts bob's payload");
         assert_eq!(pt, b"hi alice");
+    }
+
+    /// Programmatic peer-key install (vs filesystem). Mirrors the
+    /// `spawn_agent_key_relay` happy path: alice and bob exchange their
+    /// `session_key_b64` directly, build receivers, round-trip payloads.
+    #[test]
+    fn two_agents_round_trip_via_programmatic_install() {
+        let dir = TempDir::new().unwrap();
+        let mut alice = PayloadCipher::new("alice", dir.path()).unwrap();
+        let mut bob = PayloadCipher::new("bob", dir.path()).unwrap();
+
+        // Cross-install — no filesystem involved.
+        let installed_in_alice = alice
+            .install_peer_session_key(&bob.my_session_key_b64())
+            .unwrap();
+        let installed_in_bob = bob
+            .install_peer_session_key(&alice.my_session_key_b64())
+            .unwrap();
+        assert!(installed_in_alice && installed_in_bob);
+
+        // Round-trip both directions.
+        let ct = alice.encrypt(b"hello bob").unwrap();
+        assert_eq!(bob.decrypt(&ct).unwrap(), b"hello bob");
+        let ct = bob.encrypt(b"hi alice").unwrap();
+        assert_eq!(alice.decrypt(&ct).unwrap(), b"hi alice");
+
+        // Idempotent: re-installing the same key is a no-op.
+        let again = alice
+            .install_peer_session_key(&bob.my_session_key_b64())
+            .unwrap();
+        assert!(!again, "second install of same key should return false");
+
+        // Installing our own key is a no-op (self-echo from the wire bus).
+        let self_install = alice
+            .install_peer_session_key(&alice.my_session_key_b64())
+            .unwrap();
+        assert!(!self_install, "installing our own session_id must be skipped");
     }
 
     #[test]
