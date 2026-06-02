@@ -33,8 +33,19 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
 
     loop {
         // ── Phase 1: obtain config ───────────────────────────────────────────
-        let cfg = if let Some(c) = current_cfg.take() {
-            c
+        //
+        // Three states feed into the next session boot:
+        //   * `staged_config` has a freshly-staged value (login → pick_session,
+        //     possibly mid-run) — preferred over a stale `current_cfg`.
+        //   * `current_cfg` holds the previous-iteration config — used when the
+        //     session restarted for an ACL/peer change but the role didn't
+        //     change.
+        //   * Neither — first boot, wait for the user to log in.
+        let staged_now = state.lock().unwrap().staged_config.take();
+        let (cfg, fresh) = if let Some(new_cfg) = staged_now {
+            (new_cfg, true)
+        } else if let Some(c) = current_cfg.take() {
+            (c, false)
         } else {
             info!("waiting for configuration");
             let cfg = loop {
@@ -46,51 +57,54 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
                 }
                 tokio::time::sleep(Duration::from_millis(200)).await;
             };
+            (cfg, true)
+        };
 
-            // Copy session role + id into AppState before MdnsHandle::publish so
-            // the GUI shows the badge immediately and DNS-SD includes session=
-            // in its first announcement.
+        if fresh {
+            // Wipe per-session state so leftovers from a previous
+            // pick_session can't leak into the new role.
             let session_id = cfg.session_id();
             let is_admin = matches!(cfg.session_role, SessionRole::Admin);
             {
                 let mut s = state.lock().unwrap();
                 s.session_role = cfg.session_role.clone();
                 s.session_id = session_id.clone();
-                // Mint vodozemac state for this session: identity for everyone,
-                // group sender only for the admin. Clients get a `GroupSender`
-                // installed when their `Allow` lands (see admission handler).
                 s.crypto = Some(SessionCryptoState::new(is_admin));
+                s.admitted.clear();
+                s.pending_requests.clear();
+                s.banned_cns.clear();
+                s.join_flow = None;
+                s.connected_nodes.clear();
             }
+            // Drop mDNS so its TXT (cn=, session=) re-publishes with the new
+            // session_id. The new handle is constructed below.
+            _mdns = None;
+        }
 
-            // Publish DNS-SD service record and start peer browsing once, on first config.
-            if _mdns.is_none() {
-                if let Some(handle) = MdnsHandle::publish(
-                    &cfg.operator_cn(),
-                    &session_id,
-                    crate::constants::ROUTER_PORT,
-                ) {
-                    peer_rx = handle.peer_rx.clone();
-                    // Mirror the visible-sessions list into AppState continuously
-                    // (independent of session restarts) so the chooser stays fresh.
-                    let vis_state = Arc::clone(&state);
-                    let mut vis_rx = handle.sessions_rx.clone();
-                    tokio::spawn(async move {
-                        loop {
-                            {
-                                let v = vis_rx.borrow_and_update().clone();
-                                vis_state.lock().unwrap().visible_sessions = v;
-                            }
-                            if vis_rx.changed().await.is_err() {
-                                break;
-                            }
+        // (Re)publish mDNS if needed.
+        if _mdns.is_none() {
+            if let Some(handle) = MdnsHandle::publish(
+                &cfg.operator_cn(),
+                &cfg.session_id(),
+                crate::constants::ROUTER_PORT,
+            ) {
+                peer_rx = handle.peer_rx.clone();
+                let vis_state = Arc::clone(&state);
+                let mut vis_rx = handle.sessions_rx.clone();
+                tokio::spawn(async move {
+                    loop {
+                        {
+                            let v = vis_rx.borrow_and_update().clone();
+                            vis_state.lock().unwrap().visible_sessions = v;
                         }
-                    });
-                    _mdns = Some(handle);
-                }
+                        if vis_rx.changed().await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                _mdns = Some(handle);
             }
-
-            cfg
-        };
+        }
 
         // Pre-admit operator's CN so all local agents can communicate immediately.
         // When joining someone else's session, pre-admit the admin's CN too,
@@ -357,6 +371,7 @@ async fn session_loop(
         .map_err(|e| anyhow::anyhow!("declare_subscriber: {e}"))?;
 
     let admitted_changed = state.lock().unwrap().admitted_changed.clone();
+    let config_changed = state.lock().unwrap().config_changed.clone();
 
     // Mark current peer set as seen so the first .changed() fires only on a real change.
     peer_rx.borrow_and_update();
@@ -401,6 +416,10 @@ async fn session_loop(
             }
             _ = admitted_changed.notified() => {
                 info!("admitted list changed, reloading router");
+                return Ok(());
+            }
+            _ = config_changed.notified() => {
+                info!("config changed (logout + new pick_session), restarting under new role");
                 return Ok(());
             }
             Ok(()) = peer_rx.changed() => {

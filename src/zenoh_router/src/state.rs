@@ -54,6 +54,11 @@ pub struct AppState {
     /// pushing a new CN to `admitted`; `session_loop` `await`s `notified()`
     /// and returns on a ring, triggering an ACL reload.
     pub admitted_changed: Arc<Notify>,
+    /// "A fresh config has been staged" doorbell. `pick_session` rings it
+    /// after writing to `staged_config`, so the router can drop its
+    /// currently-running session and pick up the new role mid-run
+    /// (logout → pick a different session must actually swap, not stick).
+    pub config_changed: Arc<Notify>,
     /// The live Zenoh session, set after `zenoh::open` succeeds and cleared
     /// before `session.close()`. Exposed so Tauri commands (admit/deny) can
     /// publish without each task holding its own session handle.
@@ -195,6 +200,7 @@ impl AppState {
             banned_cns: HashSet::new(),
             join_flow: None,
             admitted_changed: Arc::new(Notify::new()),
+            config_changed: Arc::new(Notify::new()),
             zenoh_session: None,
         }
     }

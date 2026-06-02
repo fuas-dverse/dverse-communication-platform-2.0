@@ -452,12 +452,17 @@ async fn pick_session(
         role = ?cfg.session_role,
         "pick_session: staging session config for embedded router"
     );
-    {
+    let config_changed = {
         let mut r = router.lock().unwrap();
         r.session_role = cfg.session_role.clone();
         r.session_id = cfg.session_id();
         r.staged_config = Some(cfg);
-    }
+        r.config_changed.clone()
+    };
+    // Wake the router task — without this, a logout + login + pick-different-
+    // session would set `staged_config` but the router would keep using the
+    // previous `current_cfg` because nothing tells `session_loop` to exit.
+    config_changed.notify_one();
     state.0.lock().unwrap().screen = AppScreen::Loading;
     Ok(())
 }
