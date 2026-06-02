@@ -1,11 +1,14 @@
 import type { AppSnapshot, AgentStatus, RouterStatus, NodeInfo } from "../types";
+import PendingRequestsPanel from "./PendingRequestsPanel";
 
 interface Props {
   snapshot: AppSnapshot;
 }
 
 export default function MainScreen({ snapshot }: Props) {
-  const { router_status, session_id, session_role, connected_nodes, log } = snapshot;
+  const { router_status, session_id, session_role, connected_nodes, log, pending_requests } =
+    snapshot;
+  const isAdmin = session_role.kind === "admin";
 
   return (
     <div className="flex flex-col h-full">
@@ -31,34 +34,39 @@ export default function MainScreen({ snapshot }: Props) {
       </div>
 
       {/* Main area */}
-      <div className="flex-1 overflow-hidden flex flex-col">
-        {/* Connected nodes */}
-        <div className="flex-1 overflow-y-auto p-4">
-          <h2 className="text-sm font-semibold text-gray-300 mb-3">Connected nodes</h2>
-          {connected_nodes.length === 0 ? (
-            <p className="text-sm text-gray-600">Waiting for nodes to connect…</p>
-          ) : (
-            <div className="space-y-4">
-              {connected_nodes.map((node) => (
-                <NodeCard key={node.cn} node={node} />
+      <div className="flex-1 overflow-hidden flex">
+        <div className="flex-1 overflow-hidden flex flex-col">
+          {/* Connected nodes */}
+          <div className="flex-1 overflow-y-auto p-4">
+            <h2 className="text-sm font-semibold text-gray-300 mb-3">Connected nodes</h2>
+            {connected_nodes.length === 0 ? (
+              <p className="text-sm text-gray-600">Waiting for nodes to connect…</p>
+            ) : (
+              <div className="space-y-4">
+                {connected_nodes.map((node) => (
+                  <NodeCard key={node.cn} node={node} />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Log panel */}
+          <div className="h-36 border-t border-gray-800 flex flex-col shrink-0">
+            <div className="px-4 py-1 text-xs font-medium text-gray-500 border-b border-gray-800 shrink-0">
+              Log
+            </div>
+            <div className="flex-1 overflow-y-auto p-2 space-y-px">
+              {log.map((line, i) => (
+                <div key={i} className="font-mono text-xs text-gray-400 leading-5">
+                  {line}
+                </div>
               ))}
             </div>
-          )}
+          </div>
         </div>
 
-        {/* Log panel */}
-        <div className="h-36 border-t border-gray-800 flex flex-col shrink-0">
-          <div className="px-4 py-1 text-xs font-medium text-gray-500 border-b border-gray-800 shrink-0">
-            Log
-          </div>
-          <div className="flex-1 overflow-y-auto p-2 space-y-px">
-            {log.map((line, i) => (
-              <div key={i} className="font-mono text-xs text-gray-400 leading-5">
-                {line}
-              </div>
-            ))}
-          </div>
-        </div>
+        {/* Admin-only side panel for join requests */}
+        {isAdmin && <PendingRequestsPanel requests={pending_requests} />}
       </div>
     </div>
   );

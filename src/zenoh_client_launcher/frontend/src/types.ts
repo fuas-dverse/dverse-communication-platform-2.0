@@ -42,7 +42,27 @@ export interface BotStatus {
 
 // ── App state (mirrored from Rust backend) ─────────────────────────────────────
 
-export type AppScreen = "login" | "register" | "loading" | "main";
+export type AppScreen =
+  | "login"
+  | "register"
+  | "chooser"
+  | "requesting_join"
+  | "loading"
+  | "main";
+
+/// Requester-side join-flow status.
+export type JoinFlowDto =
+  | { status: "pending"; admin_cn: string }
+  | { status: "allowed" }
+  | { status: "denied"; reason: string | null }
+  | { status: "timed_out" };
+
+export interface PendingRequestDto {
+  requester_cn: string;
+  note: string | null;
+  requested_at: string;
+  received_secs_ago: number;
+}
 
 export type RouterStatus =
   | "idle"
@@ -79,4 +99,7 @@ export interface AppSnapshot {
   connected_nodes: NodeInfo[];
   log: string[];
   error: string | null;
+  visible_sessions: string[];
+  join_flow: JoinFlowDto | null;
+  pending_requests: PendingRequestDto[];
 }

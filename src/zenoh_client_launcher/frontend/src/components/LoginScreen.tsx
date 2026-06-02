@@ -7,11 +7,14 @@ interface Props {
   onNavigateRegister: () => void;
 }
 
+/**
+ * Credentials-only login. The session role (Admin vs Client) is picked in
+ * the Chooser screen that follows — the backend stages the credentials and
+ * flips the screen to "chooser" once this succeeds (issue #110).
+ */
 export default function LoginScreen({ prefillUsername = "", initialError = null, onNavigateRegister }: Props) {
   const [username, setUsername] = useState(prefillUsername);
   const [password, setPassword] = useState("");
-  const [createSession, setCreateSession] = useState(true);
-  const [joinAdminCn, setJoinAdminCn] = useState("");
   const [error, setError] = useState<string | null>(initialError);
   const [working, setWorking] = useState(false);
 
@@ -21,12 +24,7 @@ export default function LoginScreen({ prefillUsername = "", initialError = null,
     setError(null);
     try {
       await invoke("login", {
-        payload: {
-          username,
-          password,
-          create_session: createSession,
-          join_admin_cn: joinAdminCn,
-        },
+        payload: { username, password },
       });
     } catch (e) {
       setError(String(e));
@@ -69,42 +67,6 @@ export default function LoginScreen({ prefillUsername = "", initialError = null,
               className="input"
             />
           </Field>
-        </div>
-
-        <div className="space-y-3 pt-1">
-          <div className="flex gap-6">
-            <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
-              <input
-                type="radio"
-                checked={createSession}
-                onChange={() => setCreateSession(true)}
-                className="accent-zenoh-500"
-              />
-              Create new session
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-300">
-              <input
-                type="radio"
-                checked={!createSession}
-                onChange={() => setCreateSession(false)}
-                className="accent-zenoh-500"
-              />
-              Join session
-            </label>
-          </div>
-
-          {!createSession && (
-            <Field label="Admin username">
-              <input
-                type="text"
-                value={joinAdminCn}
-                onChange={(e) => setJoinAdminCn(e.target.value)}
-                onKeyDown={handleKeyDown}
-                className="input"
-                placeholder="e.g. alice"
-              />
-            </Field>
-          )}
         </div>
 
         {error && <p className="text-sm text-red-400">{error}</p>}

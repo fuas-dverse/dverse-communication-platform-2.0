@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AppSnapshot } from "./types";
 import LoginScreen from "./components/LoginScreen";
 import RegisterScreen from "./components/RegisterScreen";
+import ChooserScreen from "./components/ChooserScreen";
+import RequestingJoinScreen from "./components/RequestingJoinScreen";
 import LoadingScreen from "./components/LoadingScreen";
 import MainScreen from "./components/MainScreen";
 import ConnectTab from "./components/ConnectTab";
@@ -62,6 +64,25 @@ export default function App() {
             setShowRegister(true);
             setRegisterPrefill("");
           }}
+        />
+      </div>
+    );
+  }
+
+  if (snapshot.screen === "chooser") {
+    return (
+      <div className="flex h-screen bg-gray-950">
+        <ChooserScreen />
+      </div>
+    );
+  }
+
+  if (snapshot.screen === "requesting_join") {
+    return (
+      <div className="flex h-screen bg-gray-950">
+        <RequestingJoinScreen
+          joinFlow={snapshot.join_flow}
+          lastLog={snapshot.log.at(-1)}
         />
       </div>
     );
