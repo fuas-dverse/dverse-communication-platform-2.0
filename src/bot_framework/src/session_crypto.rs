@@ -322,4 +322,127 @@ mod tests {
         // against bob's real (public) cert it must be rejected.
         assert!(verify_enc_binding(&bob_cert, "bob", &forged).is_err());
     }
+
+    // ── Adversarial / property tests ──────────────────────────────────────
+
+    /// A single-bit flip in the serialized Megolm ciphertext (in the Ed25519
+    /// signature suffix) must cause decryption to fail — i.e. the message is
+    /// integrity-protected end to end.
+    #[test]
+    fn megolm_tampered_ciphertext_rejected() {
+        let mut sender = GroupSender::new();
+        let mut receiver = GroupReceiver::new(&sender.session_key());
+        let msg = sender.encrypt(b"top secret");
+        let mut bytes = msg.to_bytes();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0x01;
+        // Re-parse and try to decrypt; either re-parse fails or decrypt fails.
+        match MegolmMessage::from_bytes(&bytes) {
+            Ok(tampered) => assert!(
+                receiver.decrypt(&tampered).is_err(),
+                "tampered megolm message must not decrypt"
+            ),
+            Err(_) => (),
+        }
+    }
+
+    /// The serialized ciphertext bytes must not contain the plaintext as a
+    /// substring — a basic "we are actually encrypting" sanity check.
+    #[test]
+    fn megolm_ciphertext_does_not_contain_plaintext() {
+        let mut sender = GroupSender::new();
+        let plaintext: &[u8] = b"DVERSE-PLAINTEXT-MARKER-unique-xyz-123";
+        let bytes = sender.encrypt(plaintext).to_bytes();
+        assert!(
+            !bytes.windows(plaintext.len()).any(|w| w == plaintext),
+            "plaintext leaked into ciphertext bytes"
+        );
+    }
+
+    /// Two Megolm encrypts of the same plaintext must yield different bytes
+    /// (the ratchet advances each message; per-message keys differ).
+    #[test]
+    fn megolm_consecutive_encrypts_are_non_deterministic() {
+        let mut sender = GroupSender::new();
+        let m1 = sender.encrypt(b"same plaintext").to_bytes();
+        let m2 = sender.encrypt(b"same plaintext").to_bytes();
+        assert_ne!(m1, m2, "consecutive megolm encrypts of the same plaintext must differ");
+    }
+
+    /// A `GroupReceiver` for session A must not decrypt a message from a
+    /// separate session B — cross-session isolation.
+    #[test]
+    fn cross_session_receiver_cannot_decrypt() {
+        let session_a = GroupSender::new();
+        let mut session_b = GroupSender::new();
+        let mut recv_a = GroupReceiver::new(&session_a.session_key());
+        let msg_b = session_b.encrypt(b"session B message");
+        assert!(recv_a.decrypt(&msg_b).is_err());
+    }
+
+    /// Olm one-time keys are consumed on first use: replaying the same OTK in
+    /// a second outbound→inbound exchange must fail.
+    #[test]
+    fn one_time_key_is_consumed_once() {
+        let alice = SessionIdentity::new();
+        let mut bob = SessionIdentity::new();
+        let otk = bob.generate_one_time_keys(1)[0];
+
+        let (_, msg1) = alice
+            .olm_encrypt_to(bob.curve25519_key(), otk, b"first")
+            .unwrap();
+        let (_, pt1) = bob.olm_decrypt_from(alice.curve25519_key(), &msg1).unwrap();
+        assert_eq!(pt1, b"first");
+
+        // Same OTK — bob has now consumed it. A second prekey message
+        // referencing it must be rejected on the inbound side.
+        let (_, msg2) = alice
+            .olm_encrypt_to(bob.curve25519_key(), otk, b"replay")
+            .unwrap();
+        assert!(bob.olm_decrypt_from(alice.curve25519_key(), &msg2).is_err());
+    }
+
+    /// Single-bit flips in either the binding signature or the bound key must
+    /// make `verify_enc_binding` reject (no malleability).
+    #[test]
+    fn enc_binding_rejects_bit_flips() {
+        let (cert, key_der) = mint_tls_identity("alice");
+        let id = SessionIdentity::new();
+        let honest = sign_enc_binding(&key_der, "alice", &id.curve25519_key()).unwrap();
+        assert!(verify_enc_binding(&cert, "alice", &honest).is_ok());
+
+        // Flip a bit in the signature.
+        let mut tampered_sig = honest.clone();
+        tampered_sig.signature[0] ^= 0x01;
+        assert!(verify_enc_binding(&cert, "alice", &tampered_sig).is_err());
+
+        // Flip a bit in the bound Curve25519 key.
+        let mut tampered_key = honest.clone();
+        tampered_key.curve25519_key[0] ^= 0x01;
+        assert!(verify_enc_binding(&cert, "alice", &tampered_key).is_err());
+    }
+
+    /// Even if a forger somehow bypassed the binding check, encrypt-to-pubkey
+    /// is self-defeating: a key wrapped to bob's Curve25519 key cannot be
+    /// unwrapped with mallory's account (she lacks bob's secret).
+    #[test]
+    fn forger_with_wrong_secret_cannot_unwrap() {
+        let alice = SessionIdentity::new();
+        let mut bob = SessionIdentity::new();
+        let bob_otk = bob.generate_one_time_keys(1)[0];
+
+        // alice wraps to bob's identity (legitimate target).
+        let key = b"secret-session-key-32-bytes!!!aa";
+        let (_, msg) = alice
+            .olm_encrypt_to(bob.curve25519_key(), bob_otk, key)
+            .unwrap();
+
+        // mallory tries to decrypt with her own account — she doesn't hold the
+        // OTK secret the prekey message references, so the inbound handshake
+        // can't derive the shared 3DH secret. Result: error, no plaintext.
+        let mut mallory = SessionIdentity::new();
+        assert!(mallory
+            .olm_decrypt_from(alice.curve25519_key(), &msg)
+            .is_err());
+    }
 }
