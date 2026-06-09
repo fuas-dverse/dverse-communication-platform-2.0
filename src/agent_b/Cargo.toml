@@ -1,0 +1,22 @@
+[package]
+name = "dverse-agent-b"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "agent-b"
+path = "src/main.rs"
+
+[dependencies]
+a2a = { path = "../a2a" }
+anyhow = "1"
+bot-framework = { path = "../bot_framework" }
+clap = { version = "4", features = ["derive", "env"] }
+serde_json = "1"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }

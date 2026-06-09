@@ -24,3 +24,4 @@
 | [ADR-020](./ADR-020.md) | Split agent topics into `Publishes` and `Subscribes`                               | Accepted |
 | [ADR-021](./ADR-021.md) | Trim binary size by pruning unused dependency features                             | Accepted |
 | [ADR-022](./ADR-022.md) | Consolidate the router's mTLS identity into a single `tls_identity` helper         | Accepted |
+| [ADR-027](./ADR-027.md) | Agent-to-Agent Communication over Zenoh Pub/Sub                                    | Accepted |

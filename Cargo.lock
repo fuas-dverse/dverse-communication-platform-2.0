@@ -3,6 +3,16 @@
 version = 4
 
 [[package]]
+name = "a2a"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ab_glyph"
 version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1316,6 +1326,35 @@ name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
+
+[[package]]
+name = "dverse-agent-a"
+version = "0.1.0"
+dependencies = [
+ "a2a",
+ "anyhow",
+ "bot-framework",
+ "clap",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zenoh",
+]
+
+[[package]]
+name = "dverse-agent-b"
+version = "0.1.0"
+dependencies = [
+ "a2a",
+ "anyhow",
+ "bot-framework",
+ "clap",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "dverse-ping"
