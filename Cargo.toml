@@ -12,3 +12,8 @@ members = [
     "src/pong",
     "src/zenoh_client_launcher/src-tauri"
 ]
+# Throwaway crypto spike (issue #107): isolated, own Cargo.lock, separate dep
+# tree so it doesn't perturb the workspace's pinned/trimmed dependencies.
+exclude = [
+    "experiments/crypto-spike",
+]

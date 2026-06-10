@@ -1,0 +1,23 @@
+[package]
+name = "crypto-spike"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Throwaway spike (issue #107): per-session ECIES key-wrap + AEAD + rotation on real P-256 cert material. NOT a workspace member."
+
+[dependencies]
+# P-256: ECDSA (identity-binding sign/verify), ECDH (key agreement), PKCS#8
+# (parse the rcgen-generated private key into a SigningKey).
+p256 = { version = "0.13", features = ["ecdh", "ecdsa", "pkcs8"] }
+# Mint stand-in P-256 "TLS identity" certs (same key alg + SPKI as step-CA).
+rcgen = "0.13"
+# Extract the cert's CN + SPKI public key for binding verification.
+x509-parser = "0.18"
+# HKDF-SHA256 to derive the AEAD wrapping key from the ECDH shared secret.
+hkdf = "0.12"
+sha2 = "0.10"
+# AEAD for the key-wrap and the per-message payload.
+chacha20poly1305 = { version = "0.10", features = ["getrandom"] }
+# OsRng for ephemeral keys + nonces (rand_core 0.6 = the version p256/aead use).
+rand_core = { version = "0.6", features = ["getrandom"] }
+anyhow = "1"
