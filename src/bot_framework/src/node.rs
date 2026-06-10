@@ -26,6 +26,11 @@ pub struct NodeConfig {
     /// Path to the node's private key PEM.
     /// Required for mTLS.
     pub tls_key: Option<PathBuf>,
+
+    /// Session namespace (the session id) applied to the Zenoh session, so this
+    /// node's key expressions match its router's namespace on the shared fabric.
+    /// `None` (or empty) means no namespace. Must equal the router's namespace.
+    pub namespace: Option<String>,
 }
 
 impl NodeConfig {
@@ -36,6 +41,7 @@ impl NodeConfig {
             tls_ca: None,
             tls_cert: None,
             tls_key: None,
+            namespace: None,
         }
     }
 
@@ -51,7 +57,16 @@ impl NodeConfig {
             tls_ca: Some(tls_ca.into()),
             tls_cert: Some(tls_cert.into()),
             tls_key: Some(tls_key.into()),
+            namespace: None,
         }
+    }
+
+    /// Set the session namespace (the session id) for this node. Empty values
+    /// are ignored. Must match the router's namespace to communicate.
+    pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
+        let ns = namespace.into();
+        self.namespace = (!ns.is_empty()).then_some(ns);
+        self
     }
 
     /// Open a Zenoh session using this configuration.
@@ -68,6 +83,10 @@ impl NodeConfig {
         zinsert(&mut config, "mode", "\"client\"")?;
         zinsert(&mut config, "connect/endpoints", &format!("[\"{}\"]", self.router))?;
         zinsert(&mut config, "scouting/multicast/enabled", "false")?;
+
+        if let Some(ns) = self.namespace.as_deref().filter(|s| !s.is_empty()) {
+            zinsert(&mut config, "namespace", &format!("\"{ns}\""))?;
+        }
 
         if let Some(ca_path) = &self.tls_ca {
             zinsert(&mut config, "transport/link/tls/root_ca_certificate", &path_to_json_str(ca_path))?;

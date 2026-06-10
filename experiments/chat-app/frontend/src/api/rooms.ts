@@ -51,6 +51,10 @@ export async function deleteBot(
   })
 }
 
+export async function deleteRoom(roomId: string): Promise<void> {
+  await apiFetch<Record<string, never>>(`/rooms/${roomId}`, { method: "DELETE" })
+}
+
 export async function getAvailableBots(): Promise<AvailableBot[]> {
   return apiFetch<AvailableBot[]>("/bots/available")
 }

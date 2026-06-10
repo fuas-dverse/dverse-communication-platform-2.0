@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+import logfire
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
@@ -25,16 +26,19 @@ BOT_DEBUG_CONTEXT = os.environ.get("BOT_DEBUG_CONTEXT", "false").lower() in {
     "yes",
     "on",
 }
+MAX_BOT_HOPS = int(os.environ.get("MAX_BOT_HOPS", "4"))
 
 
 def _row_to_message(row) -> Message:
+    is_bot = bool(row["is_bot"])
+    username = f"@{row['bot_name']}" if is_bot and row["bot_name"] else row["username"]
     return Message(
         id=row["id"],
         room_id=row["room_id"],
         user_id=row["user_id"],
-        username=row["username"],
+        username=username,
         content=row["content"],
-        is_bot=bool(row["is_bot"]),
+        is_bot=is_bot,
         bot_id=row["bot_id"],
         bot_triggered_by=row["bot_triggered_by"],
         created_at=row["created_at"],
@@ -45,9 +49,10 @@ def _fetch_messages(db, room_id: str, after: Optional[str] = None) -> list[Messa
     if after:
         rows = db.execute(
             """
-            SELECT m.*, u.username
+            SELECT m.*, u.username, rb.name AS bot_name
             FROM messages m
             JOIN users u ON m.user_id = u.id
+            LEFT JOIN room_bots rb ON m.bot_id = rb.id
             WHERE m.room_id = ? AND m.created_at > ?
             ORDER BY m.created_at ASC
             LIMIT 100
@@ -57,9 +62,10 @@ def _fetch_messages(db, room_id: str, after: Optional[str] = None) -> list[Messa
     else:
         rows = db.execute(
             """
-            SELECT m.*, u.username
+            SELECT m.*, u.username, rb.name AS bot_name
             FROM messages m
             JOIN users u ON m.user_id = u.id
+            LEFT JOIN room_bots rb ON m.bot_id = rb.id
             WHERE m.room_id = ?
             ORDER BY m.created_at ASC
             LIMIT 100
@@ -145,8 +151,8 @@ async def post_message(
 
         db.execute(
             """
-            INSERT INTO messages (id, room_id, user_id, content, is_bot, bot_id, bot_triggered_by, created_at)
-            VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+            INSERT INTO messages (id, room_id, user_id, content, is_bot, bot_id, bot_triggered_by, created_at, bot_hop_count)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?, 0)
             """,
             (
                 placeholder_id,
@@ -185,6 +191,7 @@ async def post_message(
                 bot=triggered_bot,
                 triggering_message=body.content,
                 triggering_user_id=current_user.id,
+                bot_hop_count=0,
             )
         )
 
@@ -197,6 +204,34 @@ async def _generate_bot_response(
     bot: BotConfig,
     triggering_message: str,
     triggering_user_id: str,
+    bot_hop_count: int = 0,
+):
+    with logfire.span(
+        "bot.generate_response",
+        room_id=room_id,
+        bot_name=bot.name,
+        bot_provider=bot.provider,
+        bot_personality=bot.personality,
+        placeholder_id=placeholder_id,
+        bot_hop_count=bot_hop_count,
+    ):
+        await _generate_bot_response_inner(
+            room_id=room_id,
+            placeholder_id=placeholder_id,
+            bot=bot,
+            triggering_message=triggering_message,
+            triggering_user_id=triggering_user_id,
+            bot_hop_count=bot_hop_count,
+        )
+
+
+async def _generate_bot_response_inner(
+    room_id: str,
+    placeholder_id: str,
+    bot: BotConfig,
+    triggering_message: str,
+    triggering_user_id: str,
+    bot_hop_count: int = 0,
 ):
     try:
         db = get_db()
@@ -223,19 +258,14 @@ async def _generate_bot_response(
         ]
 
         if BOT_DEBUG_CONTEXT:
-            print(
-                f"[bot-context] room={room_id} bot=@{bot.name} "
-                f"history_count={len(history)} limit={BOT_HISTORY_LIMIT}",
-                flush=True,
+            logfire.debug(
+                "bot-context",
+                room_id=room_id,
+                bot_name=bot.name,
+                history_count=len(history),
+                history_limit=BOT_HISTORY_LIMIT,
+                trigger_snippet=triggering_message.replace("\n", " ").strip()[:160],
             )
-            for idx, item in enumerate(history, start=1):
-                snippet = item["content"].replace("\n", " ").strip()[:160]
-                print(
-                    f"[bot-context] {idx:02d} role={item['role']} content={snippet}",
-                    flush=True,
-                )
-            trigger_snippet = triggering_message.replace("\n", " ").strip()[:160]
-            print(f"[bot-context] trigger content={trigger_snippet}", flush=True)
 
         from ..models.bot import BotProvider
         from ..services.zenoh_bridge import zenoh_bridge
@@ -257,17 +287,18 @@ async def _generate_bot_response(
 
         # Update placeholder message with actual response
         db.execute(
-            "UPDATE messages SET content = ? WHERE id = ?",
-            (response_text, placeholder_id),
+            "UPDATE messages SET content = ?, bot_hop_count = ? WHERE id = ?",
+            (response_text, bot_hop_count, placeholder_id),
         )
         db.commit()
 
         # Fetch updated message to emit
         updated_row = db.execute(
             """
-            SELECT m.*, u.username
+            SELECT m.*, u.username, rb.name AS bot_name
             FROM messages m
             JOIN users u ON m.user_id = u.id
+            LEFT JOIN room_bots rb ON m.bot_id = rb.id
             WHERE m.id = ?
             """,
             (placeholder_id,),
@@ -275,13 +306,69 @@ async def _generate_bot_response(
 
         if updated_row:
             updated_msg = _row_to_message(updated_row)
-            # Override username with bot name label
-            updated_msg_dict = updated_msg.model_dump()
-            updated_msg_dict["username"] = f"@{bot.name}"
-
             await broker.publish(
-                room_id, {"type": "replace", "message": updated_msg_dict}
+                room_id, {"type": "replace", "message": updated_msg.model_dump()}
             )
+
+        # Check if bot reply mentions another bot — chain the conversation
+        next_hop = bot_hop_count + 1
+        if next_hop <= MAX_BOT_HOPS:
+            # Scan all mentions, skip self, use first non-self match
+            all_mentions = re.findall(r"(?<!\w)@([a-zA-Z0-9-]+)\b", response_text)
+            mention = next(
+                (m.lower() for m in all_mentions if m.lower() != bot.name.lower()),
+                None,
+            )
+            if mention is not None:
+                next_bot_row = db.execute(
+                    "SELECT * FROM room_bots WHERE room_id = ? AND LOWER(name) = ?",
+                    (room_id, mention),
+                ).fetchone()
+                if next_bot_row:
+                    next_bot = BotConfig(**dict(next_bot_row))
+                    next_placeholder_id = str(uuid.uuid4())
+                    next_placeholder_at = datetime.utcnow().isoformat() + "Z"
+                    db.execute(
+                        """
+                        INSERT INTO messages (id, room_id, user_id, content, is_bot, bot_id, bot_triggered_by, created_at, bot_hop_count)
+                        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
+                        """,
+                        (
+                            next_placeholder_id,
+                            room_id,
+                            triggering_user_id,
+                            "thinking...",
+                            next_bot.id,
+                            triggering_user_id,
+                            next_placeholder_at,
+                            next_hop,
+                        ),
+                    )
+                    db.commit()
+                    next_placeholder_msg = Message(
+                        id=next_placeholder_id,
+                        room_id=room_id,
+                        user_id=triggering_user_id,
+                        username=f"@{next_bot.name}",
+                        content="thinking...",
+                        is_bot=True,
+                        bot_id=next_bot.id,
+                        bot_triggered_by=triggering_user_id,
+                        created_at=next_placeholder_at,
+                    )
+                    await broker.publish(
+                        room_id, {"type": "message", "message": next_placeholder_msg.model_dump()}
+                    )
+                    asyncio.create_task(
+                        _generate_bot_response(
+                            room_id=room_id,
+                            placeholder_id=next_placeholder_id,
+                            bot=next_bot,
+                            triggering_message=response_text,
+                            triggering_user_id=triggering_user_id,
+                            bot_hop_count=next_hop,
+                        )
+                    )
 
     except Exception as exc:
         # Update placeholder with error text
@@ -296,9 +383,10 @@ async def _generate_bot_response(
 
             updated_row = db.execute(
                 """
-                SELECT m.*, u.username
+                SELECT m.*, u.username, rb.name AS bot_name
                 FROM messages m
                 JOIN users u ON m.user_id = u.id
+                LEFT JOIN room_bots rb ON m.bot_id = rb.id
                 WHERE m.id = ?
                 """,
                 (placeholder_id,),
@@ -308,15 +396,9 @@ async def _generate_bot_response(
                 return
 
             updated_msg = _row_to_message(updated_row)
-            updated_msg_dict = updated_msg.model_dump()
-            updated_msg_dict["username"] = f"@{bot.name}"
-
             await broker.publish(
                 room_id,
-                {
-                    "type": "replace",
-                    "message": updated_msg_dict,
-                },
+                {"type": "replace", "message": updated_msg.model_dump()},
             )
         except Exception:
             pass

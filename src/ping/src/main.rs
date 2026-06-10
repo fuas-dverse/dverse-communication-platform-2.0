@@ -1,3 +1,4 @@
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -6,8 +7,9 @@ use bot_framework::{
     cert,
     config::DverseConfig,
     node::NodeConfig,
+    payload_crypto::{self, PayloadCipher},
 };
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 const NODE_NAME: &str = "ping";
 
@@ -36,6 +38,7 @@ async fn main() -> Result<()> {
         &cert_path,
         &key_path,
     )
+    .with_namespace(cfg.session_id())
     .connect()
     .await?;
 
@@ -55,18 +58,38 @@ async fn main() -> Result<()> {
         },
     );
 
+    // Per-process Megolm cipher. Each agent owns its outbound sender and
+    // discovers peers' session keys via two parallel mechanisms:
+    //   1. `<cert_dir>/megolm/` filesystem (instant, same-machine only).
+    //   2. Zenoh-side relay on `dverse/agent_keys/**` (covers cross-machine).
+    // The cipher is shared with the relay's background tasks, hence Arc<Mutex>.
+    let crypto_dir = cfg.cert_dir.join("megolm");
+    let cipher = Arc::new(Mutex::new(PayloadCipher::new(NODE_NAME, &crypto_dir)?));
+    cipher.lock().unwrap().publish_session_key(&crypto_dir, NODE_NAME)?;
+    payload_crypto::spawn_agent_key_relay(
+        Arc::clone(&cipher),
+        session.clone(),
+        cn.to_string(),
+        NODE_NAME.to_string(),
+    );
+
     let pong_sub = session
         .declare_subscriber("dverse/pong")
         .await
         .map_err(|e| anyhow::anyhow!("declare_subscriber: {e}"))?;
 
     let mut seq: u64 = 0;
+    let mut refresh_tick = tokio::time::interval(Duration::from_secs(2));
     loop {
+        // Pick up any peer session keys written to the dir since the last loop.
+        let _ = cipher.lock().unwrap().refresh_receivers(&crypto_dir);
+
         seq += 1;
         let msg = format!("ping #{seq}");
-        info!(node = NODE_NAME, dir = "tx", payload = %msg, "sending");
+        let wire = cipher.lock().unwrap().encrypt(msg.as_bytes())?;
+        info!(node = NODE_NAME, dir = "tx", plaintext = %msg, wire_len = wire.len(), "sending (encrypted)");
         session
-            .put("dverse/ping", msg)
+            .put("dverse/ping", wire)
             .await
             .map_err(|e| anyhow::anyhow!("put: {e}"))?;
 
@@ -74,8 +97,15 @@ async fn main() -> Result<()> {
             sample = pong_sub.recv_async() => {
                 match sample {
                     Ok(s) => {
-                        let payload = String::from_utf8_lossy(&s.payload().to_bytes()).into_owned();
-                        info!(node = NODE_NAME, dir = "rx", payload = %payload, "received");
+                        let bytes = s.payload().to_bytes();
+                        let decrypted = cipher.lock().unwrap().decrypt(&bytes);
+                        match decrypted {
+                            Ok(pt) => {
+                                let payload = String::from_utf8_lossy(&pt).into_owned();
+                                info!(node = NODE_NAME, dir = "rx", payload = %payload, "received (decrypted)");
+                            }
+                            Err(e) => warn!(node = NODE_NAME, error = %e, "received undecryptable pong (likely missing peer key — refresh pending)"),
+                        }
                     }
                     Err(e) => {
                         error!(error = %e, "pong subscriber recv error");
@@ -86,6 +116,7 @@ async fn main() -> Result<()> {
             _ = tokio::time::sleep(Duration::from_secs(2)) => {
                 info!(node = NODE_NAME, "no pong within timeout");
             }
+            _ = refresh_tick.tick() => {}
         }
 
         tokio::time::sleep(Duration::from_secs(1)).await;

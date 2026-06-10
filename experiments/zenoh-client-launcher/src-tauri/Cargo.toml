@@ -1,0 +1,39 @@
+[package]
+name = "zenoh-client-launcher"
+version = "0.1.0"
+description = "Zenoh Client Launcher for connecting to network and managing bots"
+authors = []
+license = ""
+repository = ""
+edition = "2021"
+
+[lib]
+name = "zenoh_client_launcher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "zenoh-client-launcher"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-store = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
+mdns = "3.0.0"
+futures-util = "0.3"
+
+[workspace]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

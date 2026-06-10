@@ -244,6 +244,37 @@ def update_bot(
     return BotConfig(**dict(updated_row))
 
 
+@router.delete("/{room_id}", status_code=status.HTTP_200_OK)
+async def delete_room(room_id: str, current_user: User = Depends(get_current_user)):
+    db = get_db()
+
+    room = db.execute("SELECT * FROM rooms WHERE id = ?", (room_id,)).fetchone()
+    if not room:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found")
+
+    server_id = room["server_id"]
+    if server_id:
+        server = db.execute("SELECT created_by FROM servers WHERE id = ?", (server_id,)).fetchone()
+        if not server or server["created_by"] != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the server owner can delete channels")
+    else:
+        if room["created_by"] != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the room creator can delete this room")
+
+    db.execute("UPDATE messages SET bot_id = NULL WHERE bot_id IN (SELECT id FROM room_bots WHERE room_id = ?)", (room_id,))
+    db.execute("DELETE FROM room_bots WHERE room_id = ?", (room_id,))
+    db.execute("DELETE FROM messages WHERE room_id = ?", (room_id,))
+    db.execute("DELETE FROM rooms WHERE id = ?", (room_id,))
+    db.commit()
+
+    payload = {"type": "room_deleted", "room_id": room_id, "server_id": server_id}
+    if server_id:
+        await broker.publish(_server_channel(server_id), payload)
+    await broker.publish(GLOBAL_CHANNEL, payload)
+
+    return {}
+
+
 @router.delete("/{room_id}/bots/{bot_id}", status_code=status.HTTP_200_OK)
 def delete_bot(
     room_id: str,
@@ -265,6 +296,8 @@ def delete_bot(
     if not bot_row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bot not found")
 
+    # Null out bot_id on messages before delete — SQLite FK prevents delete otherwise
+    db.execute("UPDATE messages SET bot_id = NULL WHERE bot_id = ?", (bot_id,))
     db.execute("DELETE FROM room_bots WHERE id = ?", (bot_id,))
     db.commit()
 

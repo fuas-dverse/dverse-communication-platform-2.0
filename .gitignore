@@ -29,3 +29,14 @@ documents/adr/build/
 documents/adr/*.pdf
 /experiments/chat-app/frontend/coverage/
 .idea/
+
+# Local Claude Code state
+.claude/
+
+# LaTeX intermediates (keep .tex / .pdf, ignore the rest)
+documents/diagrams/*.aux
+documents/diagrams/*.fdb_latexmk
+documents/diagrams/*.fls
+documents/diagrams/*.log
+documents/diagrams/*.synctex.gz
+documents/diagrams/*.out

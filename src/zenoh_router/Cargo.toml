@@ -3,27 +3,41 @@ name = "zenoh-router"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "zenoh_router"
+path = "src/lib.rs"
+
 [[bin]]
 name = "zenoh-router"
 path = "src/main.rs"
+required-features = ["egui-gui"]
+
+[features]
+default = ["egui-gui"]
+# The egui desktop GUI. Optional so embedders (e.g. the Tauri launcher) can
+# depend on the headless library with `default-features = false` and not pull
+# eframe/egui into their build.
+egui-gui = ["dep:eframe", "dep:egui"]
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
 bot-framework = { path = "../bot_framework" }
 clap = { version = "4", features = ["derive"] }
 dirs = "5"
+serde = { version = "1", features = ["derive"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 serde_json = "1"
 # eframe default features include `accesskit` which pulls in zbus +
 # accesskit_unix + dbus (~2 MB of binary, screen-reader integration we don't
 # use).  Re-enable the rendering / font / windowing bits we actually need.
-eframe = { version = "0.31", default-features = false, features = [
+eframe = { version = "0.31", default-features = false, optional = true, features = [
     "default_fonts",
     "glow",
     "wayland",
     "x11",
 ] }
-egui = "0.31"
+egui = { version = "0.31", optional = true }
 tokio = { version = "1", features = [
     "rt-multi-thread",
     "macros",
@@ -47,3 +61,6 @@ mdns-sd = "0.13"
 if-addrs = "0.13"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+rcgen = "0.13"

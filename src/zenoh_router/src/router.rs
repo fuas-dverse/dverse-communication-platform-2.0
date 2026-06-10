@@ -6,6 +6,7 @@ use anyhow::Result;
 use bot_framework::announce::AgentAnnounce;
 use bot_framework::cert;
 use bot_framework::config::{DverseConfig, SessionRole};
+use crate::state::SessionCryptoState;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 use zenoh::Session;
@@ -32,8 +33,19 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
 
     loop {
         // ── Phase 1: obtain config ───────────────────────────────────────────
-        let cfg = if let Some(c) = current_cfg.take() {
-            c
+        //
+        // Three states feed into the next session boot:
+        //   * `staged_config` has a freshly-staged value (login → pick_session,
+        //     possibly mid-run) — preferred over a stale `current_cfg`.
+        //   * `current_cfg` holds the previous-iteration config — used when the
+        //     session restarted for an ACL/peer change but the role didn't
+        //     change.
+        //   * Neither — first boot, wait for the user to log in.
+        let staged_now = state.lock().unwrap().staged_config.take();
+        let (cfg, fresh) = if let Some(new_cfg) = staged_now {
+            (new_cfg, true)
+        } else if let Some(c) = current_cfg.take() {
+            (c, false)
         } else {
             info!("waiting for configuration");
             let cfg = loop {
@@ -45,31 +57,54 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
                 }
                 tokio::time::sleep(Duration::from_millis(200)).await;
             };
+            (cfg, true)
+        };
 
-            // Copy session role + id into AppState before MdnsHandle::publish so
-            // the GUI shows the badge immediately and DNS-SD includes session=
-            // in its first announcement.
+        if fresh {
+            // Wipe per-session state so leftovers from a previous
+            // pick_session can't leak into the new role.
             let session_id = cfg.session_id();
+            let is_admin = matches!(cfg.session_role, SessionRole::Admin);
             {
                 let mut s = state.lock().unwrap();
                 s.session_role = cfg.session_role.clone();
                 s.session_id = session_id.clone();
+                s.crypto = Some(SessionCryptoState::new(is_admin));
+                s.admitted.clear();
+                s.pending_requests.clear();
+                s.banned_cns.clear();
+                s.join_flow = None;
+                s.connected_nodes.clear();
             }
+            // Drop mDNS so its TXT (cn=, session=) re-publishes with the new
+            // session_id. The new handle is constructed below.
+            _mdns = None;
+        }
 
-            // Publish DNS-SD service record and start peer browsing once, on first config.
-            if _mdns.is_none() {
-                if let Some(handle) = MdnsHandle::publish(
-                    &cfg.operator_cn(),
-                    &session_id,
-                    crate::constants::ROUTER_PORT,
-                ) {
-                    peer_rx = handle.peer_rx.clone();
-                    _mdns = Some(handle);
-                }
+        // (Re)publish mDNS if needed.
+        if _mdns.is_none() {
+            if let Some(handle) = MdnsHandle::publish(
+                &cfg.operator_cn(),
+                &cfg.session_id(),
+                crate::constants::ROUTER_PORT,
+            ) {
+                peer_rx = handle.peer_rx.clone();
+                let vis_state = Arc::clone(&state);
+                let mut vis_rx = handle.sessions_rx.clone();
+                tokio::spawn(async move {
+                    loop {
+                        {
+                            let v = vis_rx.borrow_and_update().clone();
+                            vis_state.lock().unwrap().visible_sessions = v;
+                        }
+                        if vis_rx.changed().await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                _mdns = Some(handle);
             }
-
-            cfg
-        };
+        }
 
         // Pre-admit operator's CN so all local agents can communicate immediately.
         // When joining someone else's session, pre-admit the admin's CN too,
@@ -143,7 +178,7 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
         if !peers.is_empty() {
             info!(?peers, "connecting to peer routers");
         }
-        let config = match build_zenoh_config(&cfg.router_listen, &ca_p, &cert_p, &key_p, &admitted, &peers) {
+        let config = match build_zenoh_config(&cfg.router_listen, &ca_p, &cert_p, &key_p, &admitted, &peers, &cfg.session_id()) {
             Ok(c) => c,
             Err(e) => {
                 state.lock().unwrap().router_status = RouterStatus::Error(e.to_string());
@@ -168,8 +203,95 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
             }
         };
 
-        state.lock().unwrap().router_status = RouterStatus::Running;
+        {
+            let mut st = state.lock().unwrap();
+            st.router_status = RouterStatus::Running;
+            st.zenoh_session = Some(session.clone());
+        }
         info!(zid = %session.zid(), "router session running");
+
+        // Admission control plane: handles incoming JoinRequests (admin) and
+        // AdmissionDecisions (requester) for the lifetime of this Zenoh
+        // session. Aborted on session restart so it doesn't outlive its
+        // Session handle.
+        let admission_handle = {
+            let s = session.clone();
+            let st = Arc::clone(&state);
+            let cn = operator_cn.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::admission_handler::run(s, st, cn).await {
+                    warn!(error = %e, "admission control plane exited");
+                }
+            })
+        };
+
+        // Client role: auto-(re)send a JoinRequest. We republish on TWO
+        // schedules so the request can't get stuck in dead air:
+        //   (a) Every time we enter Running (session restart, ACL reload).
+        //   (b) Periodically while still Pending — covers the case where
+        //       a peer link comes up *during* a session (e.g. inbound from
+        //       the admin's router) and our original put landed before
+        //       routes existed for it.
+        // Stops on terminal states (Allowed = we have the Megolm key;
+        // Denied = no point retrying).
+        use crate::state::JoinFlowStatus;
+        let mut republish_handle: Option<tokio::task::JoinHandle<()>> = None;
+        if let SessionRole::Client { admin_cn } = &cfg.session_role {
+            if !admin_cn.is_empty() {
+                let needs_request = !matches!(
+                    state.lock().unwrap().join_flow,
+                    Some(JoinFlowStatus::Allowed) | Some(JoinFlowStatus::Denied { .. })
+                );
+                if needs_request {
+                    if let Err(e) = crate::admission_handler::request_join(
+                        &session,
+                        &*state,
+                        &operator_cn,
+                        admin_cn,
+                        &cert_p,
+                        &key_p,
+                        None,
+                    )
+                    .await
+                    {
+                        warn!(error = %e, "auto JoinRequest failed");
+                    }
+                }
+
+                // Periodic republish task. Holds clones of session + state
+                // and re-puts the JoinRequest every few seconds until we
+                // reach a terminal state. Aborted on session restart so the
+                // next loop iteration spawns a fresh one against the new
+                // session.
+                let s = session.clone();
+                let st = Arc::clone(&state);
+                let my_cn = operator_cn.clone();
+                let admin_cn = admin_cn.clone();
+                let cert_p = cert_p.clone();
+                let key_p = key_p.clone();
+                republish_handle = Some(tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(3)).await;
+                        let terminal = matches!(
+                            st.lock().unwrap().join_flow,
+                            Some(JoinFlowStatus::Allowed)
+                                | Some(JoinFlowStatus::Denied { .. })
+                                | None
+                        );
+                        if terminal {
+                            break;
+                        }
+                        if let Err(e) = crate::admission_handler::request_join(
+                            &s, &*st, &my_cn, &admin_cn, &cert_p, &key_p, None,
+                        )
+                        .await
+                        {
+                            warn!(error = %e, "periodic republish of JoinRequest failed");
+                        }
+                    }
+                }));
+            }
+        }
 
         // Wall-clock stale-eviction task — spawned once.  Drives the
         // Online→Degraded→Offline ladder and removes agents whose heartbeats
@@ -200,6 +322,11 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
             warn!(error = %e, "session loop errored");
         }
 
+        admission_handle.abort();
+        if let Some(h) = republish_handle.take() {
+            h.abort();
+        }
+        state.lock().unwrap().zenoh_session = None;
         let _ = session.close().await;
 
         state.lock().unwrap().router_status = RouterStatus::Reloading;
@@ -226,13 +353,13 @@ async fn acquire_or_reuse(
     }
 }
 
-/// Subscribe to node announce messages; auto-admit any node with a valid cert
-/// and feed the JSON payload into the agent inventory.  Returns when the
-/// admitted list or peer set changes (triggering a session restart).
+/// Subscribe to node announce messages and feed the JSON payload into the
+/// agent inventory.  Returns when the admitted list (driven by the explicit
+/// admission flow — issue #110) or the peer set changes (triggering a
+/// session restart).
 ///
 /// Each announce key looks like `dverse/nodes/announce/<cn>/agents/<name>`
-/// which stays inside the existing `dverse/nodes/announce/**` ACL rule, so
-/// no ACL change is needed.
+/// which stays inside the existing `dverse/nodes/announce/**` ACL rule.
 async fn session_loop(
     session: &Session,
     state: Arc<Mutex<AppState>>,
@@ -242,6 +369,9 @@ async fn session_loop(
         .declare_subscriber("dverse/nodes/announce/**")
         .await
         .map_err(|e| anyhow::anyhow!("declare_subscriber: {e}"))?;
+
+    let admitted_changed = state.lock().unwrap().admitted_changed.clone();
+    let config_changed = state.lock().unwrap().config_changed.clone();
 
     // Mark current peer set as seen so the first .changed() fires only on a real change.
     peer_rx.borrow_and_update();
@@ -276,26 +406,21 @@ async fn session_loop(
                         let cn = ann.cn.clone();
                         if cn.is_empty() { continue; }
                         let now = Instant::now();
-                        let needs_restart = {
-                            let mut st = state.lock().unwrap();
-                            // 1. Agent inventory — never triggers restart.
-                            st.upsert_agent(&ann, now);
-                            // 2. Auto-admit — triggers restart so the new CN
-                            // lands in the rebuilt ACL.
-                            if !st.admitted.contains(&cn) {
-                                st.admitted.push(cn.clone());
-                                true
-                            } else {
-                                false
-                            }
-                        };
-                        if needs_restart {
-                            info!(cn = %cn, "auto-admitted CN");
-                            return Ok(());
-                        }
+                        // Agent inventory only — admission is now explicit (#110).
+                        // Receiving a heartbeat from an unadmitted CN updates the
+                        // GUI but does NOT grant them session access.
+                        state.lock().unwrap().upsert_agent(&ann, now);
                     }
                     Err(e) => return Err(anyhow::anyhow!("subscriber recv: {e}")),
                 }
+            }
+            _ = admitted_changed.notified() => {
+                info!("admitted list changed, reloading router");
+                return Ok(());
+            }
+            _ = config_changed.notified() => {
+                info!("config changed (logout + new pick_session), restarting under new role");
+                return Ok(());
             }
             Ok(()) = peer_rx.changed() => {
                 info!("peer set changed, reloading router");
@@ -312,16 +437,24 @@ fn build_zenoh_config(
     key_path: &std::path::Path,
     admitted: &[String],
     peers: &[String],
+    namespace: &str,
 ) -> Result<zenoh::Config> {
     let mut cfg = zenoh::Config::default();
 
     zinsert(&mut cfg, "mode", "\"router\"")?;
     zinsert(&mut cfg, "listen/endpoints", &format!("[\"{listen_addr}\"]"))?;
     zinsert(&mut cfg, "scouting/multicast/enabled", "false")?;
+    // Session isolation on the shared fabric: every key this session pub/subs is
+    // transparently prefixed with the namespace, so routers + agents of one
+    // session never see another session's traffic even though all routers mesh.
+    // Agents must use the same namespace (see NodeConfig::with_namespace).
+    if !namespace.is_empty() {
+        zinsert(&mut cfg, "namespace", &json_str(namespace))?;
+    }
     zinsert(&mut cfg, "transport/link/tls/root_ca_certificate", &json_str(&ca_path.to_string_lossy()))?;
     zinsert(&mut cfg, "transport/link/tls/enable_mtls", "true")?;
     tls_identity(&mut cfg, cert_path, key_path)?;
-    zinsert(&mut cfg, "access_control", &build_acl_json(admitted))?;
+    zinsert(&mut cfg, "access_control", &build_acl_json(admitted, namespace))?;
 
     if !peers.is_empty() {
         let endpoints_json = serde_json::to_string(peers).unwrap();
@@ -334,11 +467,38 @@ fn build_zenoh_config(
     Ok(cfg)
 }
 
-fn build_acl_json(admitted: &[String]) -> String {
-    let announce_key = "dverse/nodes/announce/**";
-    let main_key = "dverse/**";
+fn build_acl_json(admitted: &[String], namespace: &str) -> String {
+    // TODO(#112): once agent payloads are AEAD-wrapped end-to-end, liberalize
+    // the main-rule to allow `dverse/**` for `any` cert holder (the plan's
+    // stated security model: crypto = membership, ACL = fabric). Until then
+    // we keep CN allow-listing so non-members can't even publish on the
+    // payload plane, even though they couldn't read it anyway.
+    //
+    // Zenoh applies the session namespace at the face boundary and the ACL
+    // interceptor sees the *namespaced* key, so the rule key_exprs must carry
+    // the same prefix the namespace adds.
+    let prefix = if namespace.is_empty() {
+        String::new()
+    } else {
+        format!("{namespace}/")
+    };
+    let announce_key = format!("{prefix}dverse/nodes/announce/**");
+    let session_key = format!("{prefix}dverse/session/**");
+    let main_key = format!("{prefix}dverse/**");
     let announce_msgs = serde_json::json!(["put", "delete", "declare_subscriber"]);
     let main_msgs = serde_json::json!(["put", "delete", "declare_subscriber", "query", "reply", "declare_queryable"]);
+    // session-rule (admission control plane): allow ANY cert holder to
+    // pub/sub on `dverse/session/**`. A requester isn't in `admitted` when
+    // they send their first `JoinRequest`, and the admin's reply is sealed
+    // by Olm to the requester — so security on this topic comes from crypto,
+    // not from CN allow-listing (issue #110).
+    let session_rule = serde_json::json!({
+        "id": "session-rule",
+        "messages": main_msgs,
+        "flows": ["ingress", "egress"],
+        "permission": "allow",
+        "key_exprs": [session_key]
+    });
 
     if admitted.is_empty() {
         serde_json::json!({
@@ -351,13 +511,14 @@ fn build_acl_json(admitted: &[String]) -> String {
                     "flows": ["ingress", "egress"],
                     "permission": "allow",
                     "key_exprs": [announce_key]
-                }
+                },
+                session_rule
             ],
             "subjects": [
                 { "id": "any" }
             ],
             "policies": [
-                { "rules": ["announce-rule"], "subjects": ["any"] }
+                { "rules": ["announce-rule", "session-rule"], "subjects": ["any"] }
             ]
         })
         .to_string()
@@ -373,6 +534,7 @@ fn build_acl_json(admitted: &[String]) -> String {
                     "permission": "allow",
                     "key_exprs": [announce_key]
                 },
+                session_rule,
                 {
                     "id": "main-rule",
                     "messages": main_msgs,
@@ -386,7 +548,7 @@ fn build_acl_json(admitted: &[String]) -> String {
                 { "id": "admitted", "cert_common_names": admitted }
             ],
             "policies": [
-                { "rules": ["announce-rule"], "subjects": ["any"] },
+                { "rules": ["announce-rule", "session-rule"], "subjects": ["any"] },
                 { "rules": ["main-rule"], "subjects": ["admitted"] }
             ]
         })
@@ -425,4 +587,44 @@ fn tls_identity(
     zinsert(cfg, "transport/link/tls/connect_certificate", &cert)?;
     zinsert(cfg, "transport/link/tls/connect_private_key", &key)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// A mode=router session must open cleanly with a `namespace` set and do a
+    /// namespaced self pub/sub round-trip — i.e. namespacing the router doesn't
+    /// break its startup or local routing (the shared-fabric isolation, #108).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn router_opens_and_routes_with_namespace() {
+        use std::time::Duration;
+
+        let mut cfg = zenoh::Config::default();
+        cfg.insert_json5("mode", "\"router\"").unwrap();
+        // Ephemeral port so the test never collides with a running router.
+        cfg.insert_json5("listen/endpoints", "[\"tcp/127.0.0.1:0\"]").unwrap();
+        cfg.insert_json5("scouting/multicast/enabled", "false").unwrap();
+        cfg.insert_json5("namespace", "\"test-session\"").unwrap();
+
+        let session = zenoh::open(cfg).await.expect("router opens with namespace");
+
+        // Code uses un-namespaced keys; the namespace is applied transparently,
+        // so a self pub/sub on "dverse/agents/ping" must still match.
+        let sub = session
+            .declare_subscriber("dverse/agents/ping")
+            .await
+            .expect("declare subscriber");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        session
+            .put("dverse/agents/ping", "hello")
+            .await
+            .expect("put");
+
+        let sample = tokio::time::timeout(Duration::from_secs(2), sub.recv_async())
+            .await
+            .expect("recv did not time out")
+            .expect("got a sample");
+        assert_eq!(sample.payload().try_to_string().unwrap().as_ref(), "hello");
+
+        session.close().await.unwrap();
+    }
 }
