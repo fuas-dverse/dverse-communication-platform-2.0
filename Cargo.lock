@@ -8933,7 +8933,6 @@ dependencies = [
 name = "zenoh-client-launcher"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "bot-framework",
  "dirs 5.0.1",
  "mdns-sd",

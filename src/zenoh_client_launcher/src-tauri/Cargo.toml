@@ -1,7 +1,7 @@
 [package]
 name = "zenoh-client-launcher"
 version = "0.1.0"
-description = "DVerse Zenoh Client Launcher — Tauri frontend for the router GUI"
+description = "DVerse — Tauri desktop app (router + bot launcher)"
 authors = []
 license = ""
 repository = ""
@@ -28,10 +28,9 @@ tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
 mdns-sd = "0.13"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
-anyhow = "1"
 bot-framework = { path = "../../bot_framework" }
-# Embed the real router in-process (mode=router, discovery, ACL, agent
-# inventory). default-features=false keeps eframe/egui out of this build.
+# Embed the real router (mode=router, TLS, ACL, agent inventory).
+# default-features=false keeps eframe/egui out of this binary.
 zenoh-router = { path = "../../zenoh_router", default-features = false }
 zenoh = { version = "1.8.0", default-features = false, features = [
     "transport_tcp",
