@@ -42,3 +42,5 @@ keyring = { version = "3", features = ["sync-secret-service", "apple-native", "w
 x509-parser = "0.18"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+vodozemac = "0.10.0"
+p256 = { version = "0.13.2", features = ["ecdsa", "pkcs8"] }
