@@ -10,5 +10,8 @@ members = [
     "src/zenoh_router",
     "src/ping",
     "src/pong",
+    "src/a2a",
+    "src/agent_a",
+    "src/agent_b",
     "src/zenoh_client_launcher/src-tauri"
 ]

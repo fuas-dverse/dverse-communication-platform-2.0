@@ -27,3 +27,4 @@
 | [ADR-023](./ADR-023.md) | Python + React over Next.js for the Chat Application                               | Accepted |
 | [ADR-024](./ADR-024.md) | Tauri as the Desktop Client Shell                                                  | Accepted |
 | [ADR-025](./ADR-025.md) | Chat Application ↔ Zenoh Communication and Bot Registration                        | Accepted |
+| [ADR-027](./ADR-027.md) | Agent-to-Agent Communication over Zenoh Pub/Sub                                    | Accepted |
