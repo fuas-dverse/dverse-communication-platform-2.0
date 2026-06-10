@@ -208,3 +208,33 @@ impl PeerRegistry {
         self.peers.values().flatten().cloned().collect()
     }
 }
+
+/// Tracks the distinct sessions visible on the LAN — one entry per session
+/// *host* (a router whose own CN equals its `session=` TXT, i.e. the admin).
+/// Pushes the sorted admin-CN list on a watch channel for the session chooser.
+///
+/// Independent of Zenoh namespacing: this is built from raw mDNS `_dverse._tcp`
+/// records, which are visible regardless of which session the local node is in.
+pub(super) struct SessionRegistry {
+    admins: HashSet<String>,
+    tx: watch::Sender<Vec<String>>,
+}
+
+impl SessionRegistry {
+    pub(super) fn new() -> (Self, watch::Receiver<Vec<String>>) {
+        let (tx, rx) = watch::channel(vec![]);
+        (Self { admins: HashSet::new(), tx }, rx)
+    }
+
+    /// Record a session host (admin CN). Returns `true` if newly added.
+    pub(super) fn add(&mut self, admin_cn: String) -> bool {
+        if self.admins.insert(admin_cn) {
+            let mut v: Vec<String> = self.admins.iter().cloned().collect();
+            v.sort();
+            let _ = self.tx.send(v);
+            true
+        } else {
+            false
+        }
+    }
+}
