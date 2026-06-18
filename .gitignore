@@ -40,3 +40,6 @@ documents/diagrams/*.fls
 documents/diagrams/*.log
 documents/diagrams/*.synctex.gz
 documents/diagrams/*.out
+
+.coverage
+.coveragerc
