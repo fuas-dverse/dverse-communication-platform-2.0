@@ -39,11 +39,14 @@ export default function BotsTab() {
     return () => clearInterval(interval)
   }, [refreshStatuses])
 
-  async function saveBots(updated: BotConfig[]) {
-    setBots(updated)
-    const store = await Store.load('launcher-config.json')
-    await store.set('bots', updated)
-    await store.save()
+  async function persistBots(updated: BotConfig[]) {
+    try {
+      const store = await Store.load('launcher-config.json')
+      await store.set('bots', updated)
+      await store.save()
+    } catch (e) {
+      console.error('Failed to persist bots:', e)
+    }
   }
 
   async function handleSaveBot(bot: BotConfig) {
@@ -53,14 +56,17 @@ export default function BotsTab() {
       existing >= 0
         ? bots.map((b) => (b.id === bot.id ? botWithRouter : b))
         : [...bots, botWithRouter]
-    await saveBots(updated)
+    setBots(updated)
     setShowForm(false)
     setEditingBot(null)
+    await persistBots(updated)
   }
 
   async function handleDelete(id: string) {
+    const updated = bots.filter((b) => b.id !== id)
+    setBots(updated)
     await handleStop(id)
-    await saveBots(bots.filter((b) => b.id !== id))
+    await persistBots(updated)
   }
 
   async function handleStart(bot: BotConfig) {
