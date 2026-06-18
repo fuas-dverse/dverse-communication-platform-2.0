@@ -281,6 +281,26 @@ struct BotTask {
 #[derive(Default)]
 pub struct BotProcesses(Mutex<HashMap<String, BotTask>>);
 
+// ── Bridge state ──────────────────────────────────────────────────────────────
+
+#[derive(Default)]
+pub struct BridgeState(Mutex<Option<BridgeHandle>>);
+
+struct BridgeHandle {
+    cancel: tokio::sync::oneshot::Sender<()>,
+    ws_port: u16,
+    token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgeInfo {
+    pub running: bool,
+    pub ws_port: Option<u16>,
+    /// Opaque connection string for 3rd-party clients (base64 JSON).
+    pub connection_string: Option<String>,
+    pub token: Option<String>,
+}
+
 // ── Wire DTOs ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -886,6 +906,371 @@ async fn run_ollama_bot(
     Ok(())
 }
 
+// ── Bridge commands ───────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn start_bridge(
+    state: State<'_, AppStateWrapper>,
+    bridge: State<'_, BridgeState>,
+) -> Result<BridgeInfo, String> {
+    // Already running → return current info.
+    {
+        let guard = bridge.0.lock().map_err(|e| e.to_string())?;
+        if let Some(h) = guard.as_ref() {
+            let conn = build_connection_string("127.0.0.1", h.ws_port, &h.token);
+            return Ok(BridgeInfo {
+                running: true,
+                ws_port: Some(h.ws_port),
+                connection_string: Some(conn),
+                token: Some(h.token.clone()),
+            });
+        }
+    }
+
+    let cfg = {
+        let inner = state.0.lock().map_err(|e| e.to_string())?;
+        let rs = inner.router.lock().map_err(|e| e.to_string())?;
+        rs.active_config
+            .clone()
+            .ok_or("no active session config — start a session first")?
+    };
+
+    let token: String = {
+        use rand::Rng;
+        let bytes: [u8; 16] = rand::thread_rng().gen();
+        hex::encode(bytes)
+    };
+
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    let (port_tx, port_rx) = tokio::sync::oneshot::channel::<u16>();
+
+    let cfg2 = cfg.clone();
+    let token2 = token.clone();
+    tokio::spawn(async move {
+        if let Err(e) = run_bridge_bot(cfg2, token2, port_tx, cancel_rx).await {
+            error!(error = %e, "bridge bot exited with error");
+        }
+    });
+
+    // Wait for the bridge to bind and report its actual port (OS-assigned).
+    let ws_port = port_rx.await.map_err(|_| "bridge failed to start".to_string())?;
+
+    let conn = build_connection_string("127.0.0.1", ws_port, &token);
+    bridge.0.lock().map_err(|e| e.to_string())?.replace(BridgeHandle {
+        cancel: cancel_tx,
+        ws_port,
+        token: token.clone(),
+    });
+
+    {
+        let inner = state.0.lock().map_err(|e| e.to_string())?;
+        let mut rs = inner.router.lock().map_err(|e| e.to_string())?;
+        rs.bridge_tokens.push(token.clone());
+    }
+
+    Ok(BridgeInfo {
+        running: true,
+        ws_port: Some(ws_port),
+        connection_string: Some(conn),
+        token: Some(token),
+    })
+}
+
+#[tauri::command]
+async fn stop_bridge(bridge: State<'_, BridgeState>) -> Result<BridgeInfo, String> {
+    let mut guard = bridge.0.lock().map_err(|e| e.to_string())?;
+    if let Some(h) = guard.take() {
+        let _ = h.cancel.send(());
+    }
+    Ok(BridgeInfo { running: false, ws_port: None, connection_string: None, token: None })
+}
+
+#[tauri::command]
+async fn get_bridge_info(bridge: State<'_, BridgeState>) -> Result<BridgeInfo, String> {
+    let guard = bridge.0.lock().map_err(|e| e.to_string())?;
+    match guard.as_ref() {
+        None => Ok(BridgeInfo { running: false, ws_port: None, connection_string: None, token: None }),
+        Some(h) => {
+            let conn = build_connection_string("127.0.0.1", h.ws_port, &h.token);
+            Ok(BridgeInfo {
+                running: true,
+                ws_port: Some(h.ws_port),
+                connection_string: Some(conn),
+                token: Some(h.token.clone()),
+            })
+        }
+    }
+}
+
+fn build_connection_string(host: &str, port: u16, token: &str) -> String {
+    use base64::Engine;
+    let json = serde_json::json!({ "host": host, "port": port, "token": token });
+    base64::engine::general_purpose::STANDARD.encode(json.to_string())
+}
+
+/// Bridge bot: connects to DVerse via mTLS (same as ollama bot), subscribes to
+/// all room messages, decrypts with PayloadCipher, and re-publishes plaintext
+/// over a local WebSocket. WebSocket clients send JSON and this publishes
+/// encrypted back onto Zenoh.
+async fn run_bridge_bot(
+    cfg: bot_framework::config::DverseConfig,
+    token: String,
+    port_tx: tokio::sync::oneshot::Sender<u16>,
+    mut cancel: tokio::sync::oneshot::Receiver<()>,
+) -> anyhow::Result<()> {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Duration;
+    use a2a::message::A2AMessage;
+    use bot_framework::{announce::{AgentAnnouncer, AgentInfo}, cert, node::NodeConfig, payload_crypto::{self, PayloadCipher}};
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::broadcast;
+    use tokio_tungstenite::tungstenite::Message as WsMsg;
+
+    let bridge_name = "dverse-bridge";
+
+    let cert_path = cert::cert_path(&cfg.cert_dir, bridge_name);
+    let key_path  = cert::key_path(&cfg.cert_dir, bridge_name);
+    let ca_path   = cert::ca_path(&cfg.cert_dir, bridge_name);
+
+    if cert::needs_renewal(&cert_path, Duration::from_secs(23 * 3600), Some(&cfg.operator_cn())).await {
+        let cert_cfg = cfg.cert_config_for(bridge_name)?;
+        cert::acquire(&cert_cfg).await?;
+    }
+
+    let local_endpoint = format!("tls/127.0.0.1:{ROUTER_PORT}");
+    let session = NodeConfig::mtls(&local_endpoint, &ca_path, &cert_path, &key_path)
+        .skip_name_check()
+        .with_namespace(cfg.session_id())
+        .connect()
+        .await?;
+
+    let cn = cfg.operator_cn();
+    let rooms_topic = "dverse/rooms/*/messages".to_string();
+    let announce_topic = "dverse/nodes/announce/**".to_string();
+
+    let _announcer = AgentAnnouncer::start(
+        session.clone(),
+        AgentInfo {
+            cn: &cn,
+            agent_name: bridge_name,
+            version: env!("CARGO_PKG_VERSION"),
+            publishes: vec![rooms_topic.clone()],
+            subscribes: vec![rooms_topic.clone(), announce_topic.clone()],
+        },
+    );
+
+    let crypto_dir = cfg.cert_dir.join("megolm");
+    let cipher = Arc::new(Mutex::new(PayloadCipher::new(bridge_name, &crypto_dir)?));
+    cipher.lock().unwrap().publish_session_key(&crypto_dir, bridge_name)?;
+    payload_crypto::spawn_agent_key_relay(
+        Arc::clone(&cipher),
+        session.clone(),
+        cn.clone(),
+        bridge_name.to_string(),
+    );
+
+    let subscriber = session
+        .declare_subscriber(&rooms_topic)
+        .await
+        .map_err(|e| anyhow::anyhow!("declare_subscriber: {e}"))?;
+
+    let announce_sub = session
+        .declare_subscriber(&announce_topic)
+        .await
+        .map_err(|e| anyhow::anyhow!("declare_subscriber announce: {e}"))?;
+
+    let a2a_inbox = format!("dverse/a2a/{bridge_name}/inbox");
+    let a2a_sub = session
+        .declare_subscriber(&a2a_inbox)
+        .await
+        .map_err(|e| anyhow::anyhow!("declare_subscriber a2a: {e}"))?;
+
+    // pending_a2a maps turn_number → (room_id, bot_name)
+    let pending_a2a: Arc<Mutex<HashMap<u32, (String, String)>>> = Arc::new(Mutex::new(HashMap::new()));
+    let a2a_turn_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+
+    // Broadcast channel: Zenoh messages → all WS clients.
+    let (tx, _) = broadcast::channel::<String>(256);
+    let tx_arc = Arc::new(tx);
+
+    // WebSocket server — bind to port 0 so OS picks a free port.
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let actual_port = listener.local_addr()?.port();
+    let _ = port_tx.send(actual_port);
+    info!(port = actual_port, "bridge WebSocket listening");
+
+    let tx_ws = Arc::clone(&tx_arc);
+    let session_ws = session.clone();
+    let cipher_ws = Arc::clone(&cipher);
+    let rooms_topic_ws = rooms_topic.clone();
+    let token_ws = token.clone();
+    let pending_a2a_ws = Arc::clone(&pending_a2a);
+    let a2a_turn_counter_ws = Arc::clone(&a2a_turn_counter);
+    let bridge_name_ws = bridge_name.to_string();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let mut rx = tx_ws.subscribe();
+            let session2 = session_ws.clone();
+            let cipher2 = Arc::clone(&cipher_ws);
+            let topic2 = rooms_topic_ws.clone();
+            let token2 = token_ws.clone();
+            let pending_a2a2 = Arc::clone(&pending_a2a_ws);
+            let turn_counter2 = Arc::clone(&a2a_turn_counter_ws);
+            let bridge_name2 = bridge_name_ws.clone();
+
+            tokio::spawn(async move {
+                let ws = match tokio_tungstenite::accept_async(stream).await {
+                    Ok(w) => w,
+                    Err(e) => { warn!(error = %e, "WS handshake failed"); return; }
+                };
+                let (mut sink, mut src) = ws.split();
+
+                // Validate token in first message.
+                let auth_ok = match src.next().await {
+                    Some(Ok(WsMsg::Text(t))) => {
+                        serde_json::from_str::<serde_json::Value>(&t)
+                            .ok()
+                            .and_then(|v| v["token"].as_str().map(|s| s == token2))
+                            .unwrap_or(false)
+                    }
+                    _ => false,
+                };
+                if !auth_ok {
+                    let _ = sink.send(WsMsg::text(r#"{"error":"unauthorized"}"#)).await;
+                    return;
+                }
+                let _ = sink.send(WsMsg::text(r#"{"ok":true}"#)).await;
+
+                loop {
+                    tokio::select! {
+                        msg = rx.recv() => {
+                            match msg {
+                                Ok(m) => { let _ = sink.send(WsMsg::text(m)).await; }
+                                Err(_) => break,
+                            }
+                        }
+                        incoming = src.next() => {
+                            match incoming {
+                                Some(Ok(WsMsg::Text(t))) => {
+                                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&t) {
+                                        if parsed.get("type").and_then(|v| v.as_str()) == Some("a2a") {
+                                            let to_agent = parsed["to"].as_str().unwrap_or("").to_string();
+                                            let room_id = parsed["room_id"].as_str().unwrap_or("").to_string();
+                                            let content = parsed["content"].as_str().unwrap_or("").to_string();
+                                            if !to_agent.is_empty() && !room_id.is_empty() {
+                                                let turn = turn_counter2.fetch_add(1, Ordering::SeqCst);
+                                                pending_a2a2.lock().unwrap().insert(turn, (room_id, to_agent.clone()));
+                                                let reply = A2AMessage::new(&bridge_name2, &to_agent, content, turn);
+                                                if let Ok(payload) = serde_json::to_vec(&reply) {
+                                                    let wire = cipher2.lock().unwrap().encrypt(&payload).unwrap_or(payload);
+                                                    let inbox_topic = format!("dverse/a2a/{to_agent}/inbox");
+                                                    if let Err(e) = session2.put(&inbox_topic, wire).await {
+                                                        warn!(error = %e, "a2a publish failed");
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            let payload = t.as_bytes().to_vec();
+                                            let wire = cipher2.lock().unwrap().encrypt(&payload).unwrap_or(payload);
+                                            if let Err(e) = session2.put(&topic2, wire).await {
+                                                warn!(error = %e, "bridge publish failed");
+                                            }
+                                        }
+                                    } else {
+                                        let payload = t.as_bytes().to_vec();
+                                        let wire = cipher2.lock().unwrap().encrypt(&payload).unwrap_or(payload);
+                                        if let Err(e) = session2.put(&topic2, wire).await {
+                                            warn!(error = %e, "bridge publish failed");
+                                        }
+                                    }
+                                }
+                                Some(Ok(WsMsg::Close(_))) | None => break,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    info!(bridge = bridge_name, "bridge bot online");
+
+    loop {
+        let _ = cipher.lock().unwrap().refresh_receivers(&crypto_dir);
+
+        tokio::select! {
+            _ = &mut cancel => {
+                info!("bridge cancelled");
+                break;
+            }
+            result = subscriber.recv_async() => {
+                let sample = match result {
+                    Ok(s) => s,
+                    Err(e) => { error!(error = %e, "bridge subscriber closed"); break; }
+                };
+                let bytes = sample.payload().to_bytes();
+                let plaintext = cipher.lock().unwrap().decrypt(&bytes).unwrap_or_else(|_| bytes.to_vec());
+                if let Ok(text) = String::from_utf8(plaintext) {
+                    let _ = tx_arc.send(text);
+                }
+            }
+            result = announce_sub.recv_async() => {
+                let sample = match result {
+                    Ok(s) => s,
+                    Err(e) => { error!(error = %e, "announce subscriber closed"); break; }
+                };
+                // Announce messages are plain JSON (not Megolm-encrypted).
+                let bytes = sample.payload().to_bytes();
+                if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+                    let _ = tx_arc.send(text);
+                }
+            }
+            result = a2a_sub.recv_async() => {
+                let sample = match result {
+                    Ok(s) => s,
+                    Err(e) => { error!(error = %e, "a2a sub closed"); break; }
+                };
+                let bytes = sample.payload().to_bytes();
+                let plaintext = cipher.lock().unwrap().decrypt(&bytes).unwrap_or_else(|_| bytes.to_vec());
+                if let Ok(text) = String::from_utf8(plaintext) {
+                    if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
+                        let from = msg["from"].as_str().unwrap_or("").to_string();
+                        let content = msg["content"].as_str().unwrap_or("").to_string();
+                        let turn = msg["turn"].as_u64().unwrap_or(0) as u32;
+                        // The bot replies with turn = our_turn + 1, so look up our_turn = turn - 1
+                        let lookup_turn = turn.saturating_sub(1);
+                        let room_info = pending_a2a.lock().unwrap().remove(&lookup_turn);
+                        if let Some((room_id, _bot_name)) = room_info {
+                            let msg_id = uuid::Uuid::new_v4().to_string();
+                            let ts = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+                            let created_at = format!("{ts}");
+                            let response = serde_json::json!({
+                                "type": "a2a_response",
+                                "from": from,
+                                "room_id": room_id,
+                                "content": content,
+                                "is_agent": true,
+                                "sender": from,
+                                "id": msg_id,
+                                "created_at": created_at,
+                            });
+                            let _ = tx_arc.send(response.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // ── Tauri entry point ─────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -910,6 +1295,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(AppStateWrapper(inner))
         .manage(BotProcesses::default())
+        .manage(BridgeState::default())
         .setup(move |_app| {
             // Run the real router (mode=router, discovery, ACL, agent inventory)
             // in-process — once. It drives the shared AppState the snapshot reads.
@@ -932,6 +1318,9 @@ pub fn run() {
             admit_request,
             deny_request,
             pick_session,
+            start_bridge,
+            stop_bridge,
+            get_bridge_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

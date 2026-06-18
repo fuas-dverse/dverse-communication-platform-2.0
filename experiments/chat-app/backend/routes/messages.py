@@ -130,6 +130,10 @@ async def post_message(
     # Emit SSE for user message
     await broker.publish(room_id, {"type": "message", "message": user_message.model_dump()})
 
+    # Publish to Zenoh so DVerse agents can see and respond
+    from ..services.zenoh_bridge import zenoh_bridge
+    zenoh_bridge.publish_message(room_id, current_user.username, body.content)
+
     # Check if message mentions a bot (@botname anywhere in the message)
     content = body.content.strip()
     triggered_bot: Optional[BotConfig] = None
@@ -183,17 +187,23 @@ async def post_message(
             room_id, {"type": "message", "message": bot_placeholder_message.model_dump()}
         )
 
-        # Fire async task to generate real response
-        asyncio.create_task(
-            _generate_bot_response(
-                room_id=room_id,
-                placeholder_id=placeholder_id,
-                bot=triggered_bot,
-                triggering_message=body.content,
-                triggering_user_id=current_user.id,
-                bot_hop_count=0,
+        # Zenoh bots respond passively via the bridge subscription
+        from ..models.bot import BotProvider
+        if triggered_bot.provider == BotProvider.ZENOH:
+            # Send the message via A2A inbox so the bot receives it directly
+            from ..services.zenoh_bridge import zenoh_bridge as _zb
+            _zb.send_a2a(to=triggered_bot.name, room_id=room_id, content=body.content)
+        else:
+            asyncio.create_task(
+                _generate_bot_response(
+                    room_id=room_id,
+                    placeholder_id=placeholder_id,
+                    bot=triggered_bot,
+                    triggering_message=body.content,
+                    triggering_user_id=current_user.id,
+                    bot_hop_count=0,
+                )
             )
-        )
 
     return user_message
 

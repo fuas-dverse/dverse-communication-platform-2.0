@@ -10,8 +10,9 @@ import MainScreen from "./components/MainScreen";
 import ConnectTab from "./components/ConnectTab";
 import BotsTab from "./components/BotsTab";
 import GraphTab from "./components/GraphTab";
+import BridgeTab from "./components/BridgeTab";
 
-type MainTab = "nodes" | "graph" | "network" | "bots";
+type MainTab = "nodes" | "graph" | "network" | "bots" | "bridge";
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
@@ -105,7 +106,7 @@ export default function App() {
           <span className="font-semibold text-gray-100 tracking-tight">DVerse</span>
         </div>
         <nav className="flex gap-1 ml-4">
-          {(["nodes", "graph", "network", "bots"] as MainTab[]).map((tab) => (
+          {(["nodes", "graph", "network", "bots", "bridge"] as MainTab[]).map((tab) => (
             <button
               key={tab}
               onClick={() => setMainTab(tab)}
@@ -121,7 +122,9 @@ export default function App() {
                   ? "Graph"
                   : tab === "network"
                     ? "Network"
-                    : "My Bots"}
+                    : tab === "bots"
+                      ? "My Bots"
+                      : "Bridge"}
             </button>
           ))}
         </nav>
@@ -138,6 +141,7 @@ export default function App() {
         <div className={mainTab === "graph" ? "h-full" : "hidden"}><GraphTab snapshot={snapshot} /></div>
         <div className={mainTab === "network" ? "overflow-auto h-full p-6" : "hidden"}><ConnectTab /></div>
         <div className={mainTab === "bots" ? "overflow-auto h-full p-6" : "hidden"}><BotsTab /></div>
+        <div className={mainTab === "bridge" ? "overflow-auto h-full p-6" : "hidden"}><BridgeTab /></div>
       </div>
     </div>
   );
