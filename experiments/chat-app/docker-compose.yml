@@ -1,35 +1,29 @@
 services:
-  zenoh-router:
-    image: eclipse/zenoh:latest
-    container_name: chatapp-zenoh
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: chatapp-backend
     ports:
-      - "7447:7447/tcp"
-      - "7447:7447/udp"
-      - "8000:8000/tcp" # REST API (optional)
-    command: --rest-http-port 8000
-    restart: unless-stopped
-    networks:
-      - chatapp
-
-  ollama:
-    image: ollama/ollama
-    container_name: chatapp-ollama
-    ports:
-      - "11434:11434"
+      - "8080:8080"
     volumes:
-      - ollama_data:/root/.ollama
+      - ./chatapp.db:/app/chatapp.db
     restart: unless-stopped
     networks:
       - chatapp
 
-    # ── GPU support (uncomment if you have an NVIDIA GPU) ──────────────────────
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: chatapp-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - chatapp
 
   jaeger:
     image: jaegertracing/jaeger:latest
@@ -87,7 +81,6 @@ services:
       - chatapp
 
 volumes:
-  ollama_data:
   prometheus_data:
   grafana_data:
 
