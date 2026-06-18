@@ -6,8 +6,33 @@ services:
     container_name: chatapp-backend
     ports:
       - "8080:8080"
+    environment:
+      - OTEL_ENABLED=false
+      - DB_PATH=/data/chatapp.db
+      - BRIDGE_HOST=host.docker.internal
     volumes:
-      - ./chatapp.db:/app/chatapp.db
+      - backend_data:/data
+      - ./backend:/app/backend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks:
+      - chatapp
+
+  frontend:
+    image: node:22-alpine
+    container_name: chatapp-frontend
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host"
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE=http://localhost:8080
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
     restart: unless-stopped
     networks:
       - chatapp
@@ -83,6 +108,7 @@ services:
 volumes:
   prometheus_data:
   grafana_data:
+  backend_data:
 
 networks:
   chatapp:
