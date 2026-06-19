@@ -1,9 +1,8 @@
 import { useState, type CSSProperties, type FormEvent } from "react"
-import { createRoom, deleteRoom } from "../api/rooms"
-import type { Room, User, Server } from "../types"
+import { createRoom, addBot, deleteRoom } from "../api/rooms"
+import type { Room, User, BotProvider, BotPersonality, Server } from "../types"
 import { Icon } from "@iconify/react"
 import ServerSettings from "./ServerSettings"
-import ZenohSessionPanel from "./ZenohSessionPanel"
 
 interface Props {
   rooms: Room[]
@@ -18,19 +17,31 @@ interface Props {
   loading: boolean
 }
 
+const PROVIDERS: BotProvider[] = ["claude", "local", "zenoh"]
+const PERSONALITIES: BotPersonality[] = ["assistant", "coder", "creative", "analyst"]
+
 export default function ChannelsSidebar({
   rooms, activeRoomId, activeServerId, activeServer, user,
   onSelectRoom, onRoomCreated, onRoomDeleted, onLogout, loading,
 }: Props) {
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [showServerSettings, setShowServerSettings] = useState(false)
+  const [channelType, setChannelType] = useState<"text" | "agent">("text")
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
+  const [botName, setBotName] = useState("")
+  const [botProvider, setBotProvider] = useState<BotProvider>("claude")
+  const [botPersonality, setBotPersonality] = useState<BotPersonality>("assistant")
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
 
+  const textChannels = rooms.filter((r) => r.bots.length === 0)
+  const agentRooms = rooms.filter((r) => r.bots.length > 0)
+
   function resetForm() {
-    setName(""); setDescription(""); setCreateError(null)
+    setName(""); setDescription(""); setBotName("")
+    setBotProvider("claude"); setBotPersonality("assistant")
+    setChannelType("text"); setCreateError(null)
   }
 
   async function handleCreate(e: FormEvent) {
@@ -40,6 +51,16 @@ export default function ChannelsSidebar({
     setCreating(true)
     try {
       const room = await createRoom({ name, description, server_id: activeServerId })
+      if (channelType === "agent" && botName.trim()) {
+        await addBot(room.id, {
+          name: botName.trim(),
+          provider: botProvider,
+          personality: botPersonality,
+        })
+        // Reload room to get bots attached
+        room.bots = [{ id: "", room_id: room.id, name: botName.trim(), provider: botProvider, personality: botPersonality, model: null, created_at: "", system_prompt: null,
+            added_by: null }]
+      }
       onRoomCreated(room)
       resetForm()
       setShowCreateForm(false)
@@ -103,6 +124,36 @@ export default function ChannelsSidebar({
       {/* Create channel form */}
       {showCreateForm && activeServerId && (
         <div style={{ padding: "10px", borderBottom: "1px solid #2e3240" }}>
+          {/* Type toggle */}
+          <div style={{ display: "flex", gap: "4px", marginBottom: "8px" }}>
+            {(["text", "agent"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setChannelType(t)}
+                style={{
+                  flex: 1,
+                  padding: "4px 0",
+                  borderRadius: "6px",
+                  border: "none",
+                  background: channelType === t ? "#5865f2" : "#2e3345",
+                  color: channelType === t ? "#fff" : "#9a9fad",
+                  fontSize: "11px",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "4px",
+                }}
+              >
+                {t === "text"
+                  ? <><Icon icon="lucide:hash" style={{ fontSize: "11px" }} /> Text</>
+                  : <><Icon icon="lucide:cpu" style={{ fontSize: "11px" }} /> Agent</>
+                }
+              </button>
+            ))}
+          </div>
+
           <form onSubmit={handleCreate} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
             <input
               type="text" value={name} onChange={(e) => setName(e.target.value)}
@@ -112,6 +163,30 @@ export default function ChannelsSidebar({
               type="text" value={description} onChange={(e) => setDescription(e.target.value)}
               placeholder="Description (optional)" style={inputStyle}
             />
+
+            {channelType === "agent" && (
+              <>
+                <div style={{ height: "1px", background: "#2e3240", margin: "2px 0" }} />
+                <div style={{ fontSize: "10px", color: "#5f6478", letterSpacing: "0.05em", textTransform: "uppercase" }}>
+                  Agent Config
+                </div>
+                <input
+                  type="text" value={botName} onChange={(e) => setBotName(e.target.value)}
+                  required={channelType === "agent"} placeholder="Agent name (e.g. helper-bot)"
+                  pattern="[a-zA-Z0-9-]+" style={inputStyle}
+                />
+                <div style={{ display: "flex", gap: "4px" }}>
+                  <select value={botProvider} onChange={(e) => setBotProvider(e.target.value as BotProvider)}
+                    style={{ ...inputStyle, flex: 1 }}>
+                    {PROVIDERS.map((p) => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                  <select value={botPersonality} onChange={(e) => setBotPersonality(e.target.value as BotPersonality)}
+                    style={{ ...inputStyle, flex: 1 }}>
+                    {PERSONALITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+              </>
+            )}
 
             {createError && (
               <div style={{ color: "#ed4245", fontSize: "11px" }}>{createError}</div>
@@ -156,21 +231,22 @@ export default function ChannelsSidebar({
         ) : (
           <>
             <SectionHeader>Text Channels</SectionHeader>
-            {rooms.filter(r => r.bots.length === 0).length === 0 && (
+            {textChannels.length === 0 && (
               <div style={{ padding: "3px 14px", fontSize: "12px", color: "#5f6478" }}>
                 No channels yet
               </div>
             )}
-            {rooms.filter(r => r.bots.length === 0).map((room) => (
+            {textChannels.map((room) => (
               <ChannelItem key={room.id} room={room} active={room.id === activeRoomId}
                 onClick={() => onSelectRoom(room.id)} isAgent={false}
                 isOwner={user?.id === activeServer?.created_by}
                 onDelete={() => onRoomDeleted(room.id)} />
             ))}
-            {rooms.filter(r => r.bots.length > 0).length > 0 && (
+
+            {agentRooms.length > 0 && (
               <>
                 <SectionHeader style={{ marginTop: "6px" }}>Agent Rooms</SectionHeader>
-                {rooms.filter(r => r.bots.length > 0).map((room) => (
+                {agentRooms.map((room) => (
                   <ChannelItem key={room.id} room={room} active={room.id === activeRoomId}
                     onClick={() => onSelectRoom(room.id)} isAgent={true}
                     isOwner={user?.id === activeServer?.created_by}
@@ -219,8 +295,6 @@ export default function ChannelsSidebar({
           </button>
         </div>
       )}
-
-      <ZenohSessionPanel />
 
       {/* Server Settings Modal */}
       {showServerSettings && activeServer && (

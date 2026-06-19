@@ -10,9 +10,8 @@ import MainScreen from "./components/MainScreen";
 import ConnectTab from "./components/ConnectTab";
 import BotsTab from "./components/BotsTab";
 import GraphTab from "./components/GraphTab";
-import BridgeTab from "./components/BridgeTab";
 
-type MainTab = "nodes" | "graph" | "network" | "bots" | "bridge";
+type MainTab = "nodes" | "graph" | "network" | "bots";
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
@@ -44,7 +43,7 @@ export default function App() {
 
   if (showRegister) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-950 p-6">
+      <div className="flex h-screen bg-gray-950 p-6">
         <RegisterScreen
           prefillUsername={registerPrefill}
           onBack={(username) => {
@@ -58,7 +57,7 @@ export default function App() {
 
   if (snapshot.screen === "login") {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-950 p-6">
+      <div className="flex h-screen bg-gray-950 p-6">
         <LoginScreen
           prefillUsername={registerPrefill}
           initialError={snapshot.error ?? null}
@@ -73,7 +72,7 @@ export default function App() {
 
   if (snapshot.screen === "chooser") {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-950">
+      <div className="flex h-screen bg-gray-950">
         <ChooserScreen />
       </div>
     );
@@ -81,7 +80,7 @@ export default function App() {
 
   if (snapshot.screen === "requesting_join") {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-950">
+      <div className="flex h-screen bg-gray-950">
         <RequestingJoinScreen
           joinFlow={snapshot.join_flow}
           lastLog={snapshot.log.at(-1)}
@@ -92,7 +91,7 @@ export default function App() {
 
   if (snapshot.screen === "loading") {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-950">
+      <div className="flex h-screen bg-gray-950">
         <LoadingScreen lastLog={snapshot.log.at(-1)} />
       </div>
     );
@@ -106,7 +105,7 @@ export default function App() {
           <span className="font-semibold text-gray-100 tracking-tight">DVerse</span>
         </div>
         <nav className="flex gap-1 ml-4">
-          {(["nodes", "graph", "network", "bots", "bridge"] as MainTab[]).map((tab) => (
+          {(["nodes", "graph", "network", "bots"] as MainTab[]).map((tab) => (
             <button
               key={tab}
               onClick={() => setMainTab(tab)}
@@ -122,9 +121,7 @@ export default function App() {
                   ? "Graph"
                   : tab === "network"
                     ? "Network"
-                    : tab === "bots"
-                      ? "My Bots"
-                      : "Bridge"}
+                    : "My Bots"}
             </button>
           ))}
         </nav>
@@ -137,11 +134,18 @@ export default function App() {
       </header>
 
       <div className="flex-1 overflow-hidden">
-        <div className={mainTab === "nodes" ? "h-full" : "hidden"}><MainScreen snapshot={snapshot} /></div>
-        <div className={mainTab === "graph" ? "h-full" : "hidden"}><GraphTab snapshot={snapshot} /></div>
-        <div className={mainTab === "network" ? "overflow-auto h-full p-6" : "hidden"}><ConnectTab /></div>
-        <div className={mainTab === "bots" ? "overflow-auto h-full p-6" : "hidden"}><BotsTab /></div>
-        <div className={mainTab === "bridge" ? "overflow-auto h-full p-6" : "hidden"}><BridgeTab /></div>
+        {mainTab === "nodes" && <MainScreen snapshot={snapshot} />}
+        {mainTab === "graph" && <GraphTab snapshot={snapshot} />}
+        {mainTab === "network" && (
+          <div className="overflow-auto h-full p-6">
+            <ConnectTab />
+          </div>
+        )}
+        {mainTab === "bots" && (
+          <div className="overflow-auto h-full p-6">
+            <BotsTab />
+          </div>
+        )}
       </div>
     </div>
   );
