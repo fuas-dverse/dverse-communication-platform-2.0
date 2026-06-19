@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 from .db import init_db
 from .observability import setup_logfire
 from .routes import auth, rooms, messages, servers
-from .routes import zenoh_session
 from .telemetry import setup_telemetry
 
 load_dotenv()
@@ -35,9 +34,7 @@ if _otel_enabled:
 async def startup():
     init_db()
     from .services.zenoh_bridge import zenoh_bridge
-    from .services.sse import broker
     loop = asyncio.get_event_loop()
-    zenoh_bridge._broker = broker
     await loop.run_in_executor(None, lambda: zenoh_bridge.start(loop))
 
 
@@ -51,4 +48,9 @@ app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(servers.router, prefix="/servers", tags=["servers"])
 app.include_router(rooms.router, prefix="/rooms", tags=["rooms"])
 app.include_router(messages.router, prefix="/rooms", tags=["messages"])
-app.include_router(zenoh_session.router, prefix="/zenoh/session", tags=["zenoh"])
+
+
+@app.get("/bots/available", tags=["bots"])
+def get_available_bots():
+    from .services.zenoh_bridge import zenoh_bridge
+    return zenoh_bridge.get_available_bots()

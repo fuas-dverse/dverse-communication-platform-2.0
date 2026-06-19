@@ -1,6 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import type { Room, ServerMember } from '../types'
-import { getZenohNodes, type DverseNode } from '../api/zenoh'
 
 interface Props {
   room: Room | null
@@ -116,16 +115,7 @@ export default function MembersPanel({
   serverMembers,
   currentUserId,
 }: Props) {
-  const [dverseNodes, setDverseNodes] = useState<DverseNode[]>([])
   const bots = room?.bots ?? []
-
-  useEffect(() => {
-    getZenohNodes().then(setDverseNodes).catch(() => setDverseNodes([]))
-    const id = setInterval(() => {
-      getZenohNodes().then(setDverseNodes).catch(() => {})
-    }, 5000)
-    return () => clearInterval(id)
-  }, [])
 
   const onlineMembers = serverMembers.filter((m) => m.is_online)
   const offlineMembers = serverMembers.filter((m) => !m.is_online)
@@ -154,7 +144,7 @@ export default function MembersPanel({
           flexShrink: 0,
         }}>
         Members
-        {(serverMembers.length > 0 || bots.length > 0 || dverseNodes.length > 0) && (
+        {serverMembers.length > 0 && (
           <span
             style={{ fontSize: '12px', fontWeight: '400', color: '#5f6478' }}>
             {serverMembers.length + bots.length}
@@ -165,7 +155,7 @@ export default function MembersPanel({
       <div
         className="scrollbar-thin"
         style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
-        {serverMembers.length === 0 && bots.length === 0 && dverseNodes.length === 0 ? (
+        {serverMembers.length === 0 && bots.length === 0 ? (
           <div
             style={{
               padding: '20px 14px',
@@ -177,37 +167,14 @@ export default function MembersPanel({
           </div>
         ) : (
           <>
-            {/* Room bots */}
+            {/* AI Agents */}
             {bots.length > 0 && (
               <>
-                <SectionLabel>Agents — {bots.length}</SectionLabel>
+                <SectionLabel>AI Agents — {bots.length}</SectionLabel>
                 {bots.map((bot) => {
                   const { bg, color } = hashColor(bot.name, BOT_COLORS)
                   return (
-                    <MemberRow
-                      key={bot.id}
-                      avatar={
-                        <div style={{ width: '24px', height: '24px', borderRadius: '8px', background: bg, color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '9px', fontWeight: '500', flexShrink: 0, position: 'relative' }}>
-                          {bot.name.slice(0, 2).toUpperCase()}
-                          <StatusDot color="#2dab7a" />
-                        </div>
-                      }
-                      name={<span style={{ color }}>@{bot.name}</span>}
-                      badge={<span style={{ marginLeft: 'auto', fontSize: '10px', padding: '1px 5px', borderRadius: '4px', background: '#163524', color: '#57f2b8', flexShrink: 0 }}>agent</span>}
-                    />
-                  )
-                })}
-              </>
-            )}
-
-            {/* DVerse Nodes */}
-            {dverseNodes.length > 0 && (
-              <>
-                <SectionLabel>DVerse — {dverseNodes.length}</SectionLabel>
-                {dverseNodes.map((node) => {
-                  const { bg, color } = hashColor(node.name, BOT_COLORS)
-                  return (
-                    <div key={node.cn}>
+                    <div key={bot.id}>
                       <MemberRow
                         avatar={
                           <div
@@ -225,11 +192,11 @@ export default function MembersPanel({
                               flexShrink: 0,
                               position: 'relative',
                             }}>
-                            {node.name.slice(0, 2).toUpperCase()}
+                            {bot.name.slice(0, 2).toUpperCase()}
                             <StatusDot color="#2dab7a" />
                           </div>
                         }
-                        name={<span style={{ color }}>{node.name}</span>}
+                        name={<span style={{ color }}>@{bot.name}</span>}
                         badge={
                           <span
                             style={{
@@ -241,21 +208,19 @@ export default function MembersPanel({
                               color: '#57f2b8',
                               flexShrink: 0,
                             }}>
-                            node
+                            bot
                           </span>
                         }
                       />
-                      {node.agents.length > 0 && (
-                        <div
-                          style={{
-                            fontSize: '11px',
-                            color: '#5f6478',
-                            padding: '0 14px 4px',
-                            lineHeight: '1.4',
-                          }}>
-                          {node.agents.map((a) => `@${a}`).join(', ')}
-                        </div>
-                      )}
+                      <div
+                        style={{
+                          fontSize: '11px',
+                          color: '#5f6478',
+                          padding: '0 14px 4px',
+                          lineHeight: '1.4',
+                        }}>
+                        {bot.personality} · {bot.provider}
+                      </div>
                     </div>
                   )
                 })}
@@ -266,7 +231,7 @@ export default function MembersPanel({
             {onlineMembers.length > 0 && (
               <>
                 <SectionLabel
-                  style={{ marginTop: (bots.length > 0 || dverseNodes.length > 0) ? '8px' : undefined }}>
+                  style={{ marginTop: bots.length > 0 ? '8px' : undefined }}>
                   Online — {onlineMembers.length}
                 </SectionLabel>
                 {onlineMembers.map((m) => {

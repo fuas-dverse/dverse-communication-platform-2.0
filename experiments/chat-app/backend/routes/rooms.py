@@ -170,9 +170,11 @@ def add_bot(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the room creator can add bots")
 
     if body.provider == "zenoh":
+        if not body.token:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="A token is required to add a Zenoh bot")
         from ..services.zenoh_bridge import zenoh_bridge
-        if not zenoh_bridge.available:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Connect to a DVerse session first")
+        if not zenoh_bridge.verify_bot_token(body.name, body.token):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid token — the bot owner must share the correct token with you")
 
     existing_bot = db.execute(
         "SELECT id FROM room_bots WHERE room_id = ? AND name = ?",

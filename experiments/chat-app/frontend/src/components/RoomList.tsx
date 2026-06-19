@@ -59,6 +59,11 @@ export default function RoomList({ rooms, onRoomCreated }: Props) {
                   )}
                 </div>
                 <div className="flex-shrink-0 flex items-center gap-2">
+                  {room.bots.length > 0 && (
+                    <span className="bg-indigo-900/60 text-indigo-300 text-xs px-2.5 py-1 rounded-full border border-indigo-700/50">
+                      {room.bots.length} {room.bots.length === 1 ? "bot" : "bots"}
+                    </span>
+                  )}
                   <svg
                     className="w-4 h-4 text-gray-500 group-hover:text-indigo-400 transition"
                     fill="none"

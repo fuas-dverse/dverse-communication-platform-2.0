@@ -20,9 +20,6 @@ pub struct AppState {
     pub log: Vec<String>,
     /// Config written by the GUI; background thread consumes it to start/restart.
     pub staged_config: Option<DverseConfig>,
-    /// Last accepted config — set by the router loop after it takes staged_config.
-    /// Kept alive so bridge and other commands can read session params mid-run.
-    pub active_config: Option<DverseConfig>,
     /// Whether this router hosts the session (Admin) or joined one (Client).
     /// Copied from the accepted config; the GUI reads it for the session badge.
     pub session_role: SessionRole,
@@ -66,9 +63,6 @@ pub struct AppState {
     /// before `session.close()`. Exposed so Tauri commands (admit/deny) can
     /// publish without each task holding its own session handle.
     pub zenoh_session: Option<zenoh::Session>,
-    /// Bridge tokens issued by the admin. Each token allows a plain-TCP
-    /// client to connect without mTLS, restricted to rooms + announce topics.
-    pub bridge_tokens: Vec<String>,
 }
 
 /// Per-session crypto material. Lifetime = one Zenoh session as a member
@@ -197,7 +191,6 @@ impl AppState {
             admitted: Vec::new(),
             log: Vec::new(),
             staged_config: initial_config,
-            active_config: None,
             session_role,
             session_id,
             connected_nodes: HashMap::new(),
@@ -209,7 +202,6 @@ impl AppState {
             admitted_changed: Arc::new(Notify::new()),
             config_changed: Arc::new(Notify::new()),
             zenoh_session: None,
-            bridge_tokens: Vec::new(),
         }
     }
 
