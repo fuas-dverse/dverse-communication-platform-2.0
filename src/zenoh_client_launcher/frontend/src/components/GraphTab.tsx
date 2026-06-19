@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import {
   ReactFlow,
   Background,
@@ -11,7 +11,7 @@ import {
   Position,
   MarkerType,
 } from "@xyflow/react";
-import dagre from "dagre";
+import ELK, { type ElkNode } from "elkjs/lib/elk.bundled.js";
 import "@xyflow/react/dist/style.css";
 import type { AppSnapshot, AgentStatus } from "../types";
 
@@ -22,8 +22,14 @@ import type { AppSnapshot, AgentStatus } from "../types";
  *
  * Agents are oval-ish nodes coloured by liveness status; topics are
  * rectangular nodes. The graph is rebuilt from the polled `AppSnapshot`
- * on every render and laid out left-to-right with dagre, so it animates
- * as the snapshot updates (every 500ms in App.tsx).
+ * and laid out left-to-right with the Eclipse Layout Kernel (elkjs),
+ * which produces a Sugiyama-style layered placement with orthogonal
+ * edge routing — closer to the canonical `rqt_graph` look than dagre.
+ *
+ * Layout is asynchronous (ELK returns a Promise), so positions are
+ * computed in an effect and the previous layout is kept on-screen while
+ * the next one is in flight. A cancellation flag avoids stale results
+ * from a slow tick overwriting a more recent fast one.
  *
  * This is a pure frontend feature — it consumes the existing
  * `connected_nodes[].agents[].publishes/subscribes` data and needs no
@@ -47,7 +53,7 @@ interface TopicNodeData {
   [key: string]: unknown;
 }
 
-// Fixed node footprints so dagre can reserve space.
+// Fixed node footprints so ELK can reserve space.
 const AGENT_W = 180;
 const AGENT_H = 48;
 const TOPIC_W = 200;
@@ -95,18 +101,35 @@ function TopicNode({ data }: NodeProps) {
 
 const nodeTypes = { agent: AgentNode, topic: TopicNode };
 
-// ── Graph construction + layout ──────────────────────────────────────────────
+// ── ELK setup ────────────────────────────────────────────────────────────────
+
+// One instance per module — ELK is stateless across calls but the
+// constructor spins up a worker, so we don't want to do it per render.
+const elk = new ELK();
+
+// Match the previous dagre tuning so the swap is a layout-quality
+// improvement, not a visual surprise:
+//   dagre rankdir "LR" ⇒ ELK direction "RIGHT"
+//   dagre ranksep 90   ⇒ elk.layered.spacing.nodeNodeBetweenLayers
+//   dagre nodesep 24   ⇒ elk.spacing.nodeNode
+// ELK option values are strings.
+const ELK_LAYOUT_OPTIONS: Record<string, string> = {
+  "elk.algorithm": "layered",
+  "elk.direction": "RIGHT",
+  "elk.layered.spacing.nodeNodeBetweenLayers": "90",
+  "elk.spacing.nodeNode": "24",
+  "elk.edgeRouting": "ORTHOGONAL",
+};
+
+// ── Graph construction ────────────────────────────────────────────────────────
 
 interface BuiltGraph {
-  nodes: Node[];
+  /** Nodes without positions — positions are filled in by ELK. */
+  unpositionedNodes: Node[];
   edges: Edge[];
 }
 
 function buildGraph(snapshot: AppSnapshot, showTopics: boolean): BuiltGraph {
-  const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: "LR", nodesep: 24, ranksep: 90 });
-  g.setDefaultEdgeLabel(() => ({}));
-
   // Logical graph: agentId -> data, topic key -> set, plus pub/sub links.
   const agents = new Map<string, AgentNodeData>();
   const topics = new Set<string>();
@@ -149,7 +172,6 @@ function buildGraph(snapshot: AppSnapshot, showTopics: boolean): BuiltGraph {
   let renderEdges = edges;
   if (!showTopics) {
     const collapsed = new Map<string, Edge>();
-    // pub edges land on a topic; sub edges leave a topic. Join them.
     const pubsByTopic = new Map<string, string[]>(); // topic -> [agentId]
     const subsByTopic = new Map<string, string[]>(); // topic -> [agentId]
     for (const e of edges) {
@@ -184,47 +206,67 @@ function buildGraph(snapshot: AppSnapshot, showTopics: boolean): BuiltGraph {
     renderEdges = [...collapsed.values()];
   }
 
-  // Register nodes with dagre.
-  for (const [id] of agents) {
-    g.setNode(id, { width: AGENT_W, height: AGENT_H });
-  }
-  if (showTopics) {
-    for (const ke of topics) {
-      g.setNode(`topic:${ke}`, { width: TOPIC_W, height: TOPIC_H });
-    }
-  }
-  for (const e of renderEdges) {
-    if (g.hasNode(e.source) && g.hasNode(e.target)) {
-      g.setEdge(e.source, e.target);
-    }
-  }
-
-  dagre.layout(g);
-
-  const rfNodes: Node[] = [];
+  // Build React Flow nodes with placeholder positions; ELK will fill in x/y.
+  const unpositionedNodes: Node[] = [];
   for (const [id, data] of agents) {
-    const pos = g.node(id);
-    rfNodes.push({
+    unpositionedNodes.push({
       id,
       type: "agent",
       data,
-      position: { x: (pos?.x ?? 0) - AGENT_W / 2, y: (pos?.y ?? 0) - AGENT_H / 2 },
+      position: { x: 0, y: 0 },
     });
   }
   if (showTopics) {
     for (const ke of topics) {
-      const id = `topic:${ke}`;
-      const pos = g.node(id);
-      rfNodes.push({
-        id,
+      unpositionedNodes.push({
+        id: `topic:${ke}`,
         type: "topic",
         data: { label: ke } satisfies TopicNodeData,
-        position: { x: (pos?.x ?? 0) - TOPIC_W / 2, y: (pos?.y ?? 0) - TOPIC_H / 2 },
+        position: { x: 0, y: 0 },
       });
     }
   }
 
-  return { nodes: rfNodes, edges: renderEdges };
+  return { unpositionedNodes, edges: renderEdges };
+}
+
+/**
+ * Run ELK on `nodes`/`edges` and return a new array of React Flow nodes
+ * with `position` populated from the ELK result. ELK x/y are already
+ * top-left corners (unlike dagre, which gives centers), so they map
+ * directly onto React Flow's `position` field.
+ */
+async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  const elkGraph: ElkNode = {
+    id: "root",
+    layoutOptions: ELK_LAYOUT_OPTIONS,
+    children: nodes.map((n) => ({
+      id: n.id,
+      width: n.type === "topic" ? TOPIC_W : AGENT_W,
+      height: n.type === "topic" ? TOPIC_H : AGENT_H,
+    })),
+    // Only include edges whose endpoints exist as nodes — when topics
+    // are hidden, collapsed edges already satisfy this, but be defensive.
+    edges: edges
+      .filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target))
+      .map((e) => ({
+        id: e.id,
+        sources: [e.source],
+        targets: [e.target],
+      })),
+  };
+
+  const result = await elk.layout(elkGraph);
+  const positions = new Map<string, { x: number; y: number }>();
+  for (const c of result.children ?? []) {
+    positions.set(c.id, { x: c.x ?? 0, y: c.y ?? 0 });
+  }
+
+  return nodes.map((n) => ({
+    ...n,
+    position: positions.get(n.id) ?? { x: 0, y: 0 },
+  }));
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -232,10 +274,35 @@ function buildGraph(snapshot: AppSnapshot, showTopics: boolean): BuiltGraph {
 export default function GraphTab({ snapshot }: Props) {
   const [showTopics, setShowTopics] = useState(true);
 
-  const { nodes, edges } = useMemo(
+  // Pure data construction — synchronous and cheap.
+  const { unpositionedNodes, edges } = useMemo(
     () => buildGraph(snapshot, showTopics),
     [snapshot, showTopics],
   );
+
+  // ELK is async. We hold the most recent positioned snapshot in state so
+  // that the previous layout stays on-screen while the next one computes,
+  // avoiding a flicker on every 500ms snapshot tick.
+  const [positionedNodes, setPositionedNodes] = useState<Node[]>([]);
+
+  useEffect(() => {
+    if (unpositionedNodes.length === 0) {
+      setPositionedNodes([]);
+      return;
+    }
+    let cancelled = false;
+    layoutWithElk(unpositionedNodes, edges)
+      .then((nodes) => {
+        if (!cancelled) setPositionedNodes(nodes);
+      })
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error("ELK layout failed:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [unpositionedNodes, edges]);
 
   const miniMapColor = useCallback((n: Node) => {
     if (n.type === "topic") return "#0284c7";
@@ -243,7 +310,7 @@ export default function GraphTab({ snapshot }: Props) {
     return status === "online" ? "#22c55e" : status === "degraded" ? "#eab308" : "#6b7280";
   }, []);
 
-  const empty = nodes.length === 0;
+  const empty = unpositionedNodes.length === 0;
 
   return (
     <div className="relative h-full w-full bg-gray-950">
@@ -268,9 +335,13 @@ export default function GraphTab({ snapshot }: Props) {
         <div className="flex h-full items-center justify-center text-sm text-gray-600">
           Waiting for agents to connect…
         </div>
+      ) : positionedNodes.length === 0 ? (
+        <div className="flex h-full items-center justify-center text-sm text-gray-600">
+          Laying out graph…
+        </div>
       ) : (
         <ReactFlow
-          nodes={nodes}
+          nodes={positionedNodes}
           edges={edges}
           nodeTypes={nodeTypes}
           fitView
