@@ -1,0 +1,20 @@
+[run]
+source = backend
+omit =
+    backend/main.py
+    backend/run.py
+    backend/observability.py
+    backend/telemetry.py
+    backend/services/zenoh_bridge.py
+    backend/services/llm.py
+    backend/tests/*
+
+[report]
+omit =
+    backend/main.py
+    backend/run.py
+    backend/observability.py
+    backend/telemetry.py
+    backend/services/zenoh_bridge.py
+    backend/services/llm.py
+    backend/tests/*

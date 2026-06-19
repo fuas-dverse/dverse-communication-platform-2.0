@@ -78,7 +78,7 @@ class TestAuth(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 401)
 
-    def test_get_current_user_rejects_missing_user(self) -> None:
+    def test_get_current_user_rejects_missing_user_2(self) -> None:
         token = jwt.encode(
             {"sub": "missing-user"},
             "unit-test-secret",
@@ -94,3 +94,24 @@ class TestAuth(unittest.TestCase):
             auth_module.get_current_user(credentials)
 
         self.assertEqual(context.exception.status_code, 401)
+
+    def test_register_success(self) -> None:
+        result = auth_routes.register(UserCreate(username="dave", password="pass123"))
+        self.assertIsNotNone(result.access_token)
+        self.assertEqual(result.user.username, "dave")
+
+    def test_login_success(self) -> None:
+        auth_routes.register(UserCreate(username="eve", password="mypassword"))
+        result = auth_routes.login(UserLogin(username="eve", password="mypassword"))
+        self.assertIsNotNone(result.access_token)
+        self.assertEqual(result.user.username, "eve")
+
+    def test_get_current_user_success(self) -> None:
+        reg = auth_routes.register(UserCreate(username="frank", password="pass"))
+        credentials = HTTPAuthorizationCredentials(
+            scheme="Bearer",
+            credentials=reg.access_token,
+        )
+        with patch("backend.auth.get_db", return_value=self.conn):
+            user = auth_module.get_current_user(credentials)
+        self.assertEqual(user.username, "frank")

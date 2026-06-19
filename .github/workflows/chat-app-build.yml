@@ -74,8 +74,12 @@ jobs:
 
       - name: Run backend tests with coverage
         run: |
-          PYTHONPATH=. .venv/bin/coverage run --source=backend -m unittest discover -s backend/tests -v
-          .venv/bin/coverage xml -o coverage.xml
+          PYTHONPATH=. .venv/bin/coverage run --rcfile=.coveragerc -m unittest discover -s backend/tests -v
+          .venv/bin/coverage xml --rcfile=.coveragerc -o coverage.xml
+
+      - name: Check backend coverage threshold
+        run: |
+          .venv/bin/coverage report --rcfile=.coveragerc --fail-under=85
 
       - name: Upload backend coverage report
         uses: actions/upload-artifact@v4
