@@ -31,6 +31,10 @@ pub struct NodeConfig {
     /// node's key expressions match its router's namespace on the shared fabric.
     /// `None` (or empty) means no namespace. Must equal the router's namespace.
     pub namespace: Option<String>,
+
+    /// Skip TLS SNI hostname verification. Required when connecting via IP
+    /// address (e.g. 127.0.0.1) where the cert's DNS SAN won't match.
+    pub skip_name_check: bool,
 }
 
 impl NodeConfig {
@@ -42,6 +46,7 @@ impl NodeConfig {
             tls_cert: None,
             tls_key: None,
             namespace: None,
+            skip_name_check: false,
         }
     }
 
@@ -58,7 +63,15 @@ impl NodeConfig {
             tls_cert: Some(tls_cert.into()),
             tls_key: Some(tls_key.into()),
             namespace: None,
+            skip_name_check: false,
         }
+    }
+
+    /// Skip TLS SNI hostname verification on connect. Use when connecting via
+    /// IP address (e.g. 127.0.0.1) where the cert's DNS SAN won't match.
+    pub fn skip_name_check(mut self) -> Self {
+        self.skip_name_check = true;
+        self
     }
 
     /// Set the session namespace (the session id) for this node. Empty values
@@ -102,6 +115,10 @@ impl NodeConfig {
 
         if let Some(key_path) = &self.tls_key {
             zinsert(&mut config, "transport/link/tls/connect_private_key", &path_to_json_str(key_path))?;
+        }
+
+        if self.skip_name_check {
+            zinsert(&mut config, "transport/link/tls/verify_name_on_connect", "false")?;
         }
 
         Ok(config)

@@ -1,5 +1,5 @@
 import { useState } from "react"
-import type { Room, Message, BotConfig } from "../types"
+import type { Room, Message } from "../types"
 import MessageList from "./MessageList"
 import MessageInput from "./MessageInput"
 import BotSettings from "./BotSettings"
@@ -11,7 +11,7 @@ interface Props {
   loadingMessages: boolean
   currentUserId: string
   onSend: (content: string) => Promise<void>
-  onBotsChange: (bots: BotConfig[]) => void
+  onBotsChange: (bots: import("../types").BotConfig[]) => void
   isCreator: boolean
 }
 
@@ -26,8 +26,7 @@ export default function ChatArea({
   isCreator,
 }: Props) {
   const [showBotSettings, setShowBotSettings] = useState(false)
-
-  // Detect if any bot message is currently "thinking"
+  // Detect if any agent message is currently "thinking"
   const thinkingMsg = [...messages].reverse().find((m) => m.is_bot && m.content === "thinking...")
   const botNames = room?.bots.map((b) => b.name) ?? []
 
@@ -54,8 +53,6 @@ export default function ChatArea({
       </div>
     )
   }
-
-  const memberCount = (room.bots.length) + 1 // bots + current user
 
   return (
     <div
@@ -97,34 +94,28 @@ export default function ChatArea({
             {room.description}
           </span>
         )}
-
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "4px" }}>
-          <HdrBtn>
-            <Icon icon="lucide:users" style={{ fontSize: "14px" }} />{" "}
-            <span
-              style={{
-                background: "#3b3f52",
-                borderRadius: "10px",
-                padding: "2px 8px",
-                fontSize: "11px",
-                color: "#9a9fad",
-              }}
-            >
-              {memberCount}
-            </span>
-          </HdrBtn>
-          {isCreator && (
-            <HdrBtn
-              active={showBotSettings}
-              onClick={() => setShowBotSettings((v) => !v)}
-            >
-              <Icon icon="lucide:settings" style={{ fontSize: "13px" }} /> Bots
-            </HdrBtn>
-          )}
-        </div>
+        {isCreator && (
+          <button
+            onClick={() => setShowBotSettings(v => !v)}
+            style={{
+              marginLeft: "auto",
+              padding: "4px 10px",
+              borderRadius: "6px",
+              border: "none",
+              background: showBotSettings ? "#5865f2" : "transparent",
+              color: showBotSettings ? "#fff" : "#9a9fad",
+              cursor: "pointer",
+              fontSize: "12px",
+              display: "flex",
+              alignItems: "center",
+              gap: "4px",
+            }}
+          >
+            <Icon icon="lucide:cpu" style={{ fontSize: "13px" }} /> Agents
+          </button>
+        )}
       </div>
 
-      {/* Bot Settings panel (toggled from header) */}
       {showBotSettings && isCreator && (
         <BotSettings roomId={room.id} bots={room.bots} onBotsChange={onBotsChange} />
       )}
@@ -186,45 +177,12 @@ export default function ChatArea({
         onSend={onSend}
         placeholder={
           botNames.length > 0
-            ? `Message #${room.name} — or type @agentname to invoke an AI agent`
+            ? `Message #${room.name} — @mention an agent to trigger it`
             : `Message #${room.name}`
         }
         botNames={botNames}
       />
     </div>
-  )
-}
-
-function HdrBtn({
-  children,
-  active = false,
-  onClick,
-}: {
-  children: React.ReactNode
-  active?: boolean
-  onClick?: () => void
-}) {
-  const [hovered, setHovered] = useState(false)
-  return (
-    <button
-      onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        padding: "4px 8px",
-        borderRadius: "6px",
-        border: "none",
-        background: active ? "#5865f2" : hovered ? "#2e3345" : "transparent",
-        color: active ? "#fff" : hovered ? "#e0e2ea" : "#9a9fad",
-        cursor: "pointer",
-        fontSize: "12px",
-        display: "flex",
-        alignItems: "center",
-        gap: "4px",
-      }}
-    >
-      {children}
-    </button>
   )
 }
 

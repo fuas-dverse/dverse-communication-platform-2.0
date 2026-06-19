@@ -29,6 +29,8 @@ uuid = { version = "1", features = ["v4"] }
 mdns-sd = "0.13"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 bot-framework = { path = "../../bot_framework" }
+a2a           = { path = "../../a2a" }
+anyhow        = "1"
 # Embed the real router (mode=router, TLS, ACL, agent inventory).
 # default-features=false keeps eframe/egui out of this binary.
 zenoh-router = { path = "../../zenoh_router", default-features = false }
@@ -37,6 +39,11 @@ zenoh = { version = "1.8.0", default-features = false, features = [
     "transport_tls",
 ] }
 dirs = "5"
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3"
+rand = "0.8"
+base64 = "0.22"
+hex = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
