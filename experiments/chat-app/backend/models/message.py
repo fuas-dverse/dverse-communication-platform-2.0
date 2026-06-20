@@ -14,4 +14,5 @@ class Message(BaseModel):
     is_bot: bool
     bot_id: str | None = None
     bot_triggered_by: str | None = None
+    bot_hop_count: int = 0
     created_at: str

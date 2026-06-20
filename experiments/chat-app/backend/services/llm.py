@@ -8,7 +8,7 @@ import httpx
 from opentelemetry.trace import Status, StatusCode
 
 from ..models.bot import BotConfig, BotPersonality, BotProvider, PERSONALITY_PROMPTS
-from ..telemetry import llm_duration, llm_requests, tracer
+from ..telemetry import llm_duration, llm_requests, llm_tokens_input, llm_tokens_output, tracer
 
 DEFAULT_CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_LOCAL_URL = "http://localhost:11434"
@@ -152,10 +152,17 @@ def call_local(bot: BotConfig, triggering_message: str, history: list[dict]) -> 
 
                     if api_style == "openai":
                         raw_text = data["choices"][0]["message"]["content"]
+                        usage = data.get("usage", {})
+                        in_tok = usage.get("prompt_tokens", 0)
+                        out_tok = usage.get("completion_tokens", 0)
                     elif api_style == "ollama":
                         raw_text = data.get("message", {}).get("content", "")
+                        in_tok = data.get("prompt_eval_count", 0)
+                        out_tok = data.get("eval_count", 0)
                     else:
                         raw_text = data.get("response", "")
+                        in_tok = data.get("prompt_eval_count", 0)
+                        out_tok = data.get("eval_count", 0)
 
                     # Some local endpoints/models return text in alternate fields.
                     if not raw_text:
@@ -170,6 +177,10 @@ def call_local(bot: BotConfig, triggering_message: str, history: list[dict]) -> 
                         cleaned = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.DOTALL).strip()
                         if cleaned:
                             span.set_attribute("llm.response.length", len(cleaned))
+                            if in_tok > 0:
+                                llm_tokens_input.add(in_tok, attrs)
+                            if out_tok > 0:
+                                llm_tokens_output.add(out_tok, attrs)
                             llm_requests.add(1, {**attrs, "status": "ok"})
                             return cleaned
 

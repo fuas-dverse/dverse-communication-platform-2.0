@@ -153,21 +153,8 @@ class ZenohBridge:
             "bot_name": bot_name,
             "message": message,
             "history": history,
-        })
+        }).encode()
 
-        await loop.run_in_executor(
-            None,
-            lambda: self._session.put(f"chat/{room_id}/request/{bot_name}", payload.encode()),
-        )
-
-        try:
-            return await asyncio.wait_for(future, timeout=timeout)
-        except asyncio.TimeoutError:
-            self._pending.pop(request_id, None)
-            raise TimeoutError(
-                f"@{bot_name} did not respond within {timeout}s. "
-                "Is the bot agent running and connected to the Zenoh router?"
-            )
         with tracer.start_as_current_span("zenoh.bot_request") as span:
             span.set_attribute("zenoh.room_id", room_id)
             span.set_attribute("zenoh.bot_name", bot_name)
@@ -177,7 +164,7 @@ class ZenohBridge:
             try:
                 await loop.run_in_executor(
                     None,
-                    lambda: self._session.put(f"chat/{room_id}/request/{bot_name}", payload.encode()),
+                    lambda: self._session.put(f"chat/{room_id}/request/{bot_name}", payload),
                 )
                 return await asyncio.wait_for(future, timeout=timeout)
             except asyncio.TimeoutError:

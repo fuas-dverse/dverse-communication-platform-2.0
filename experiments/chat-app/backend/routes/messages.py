@@ -28,6 +28,20 @@ BOT_DEBUG_CONTEXT = os.environ.get("BOT_DEBUG_CONTEXT", "false").lower() in {
 }
 MAX_BOT_HOPS = int(os.environ.get("MAX_BOT_HOPS", "4"))
 
+_ZENOH_RE = re.compile(
+    r"^/zenoh\s+@([\w-]+)\s+@([\w-]+)(?:\s+(\d+))?\s+(.+)$",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _parse_zenoh_command(content: str):
+    """Parse /zenoh @bot1 @bot2 [turns] prompt → (bot1, bot2, turns, prompt) or None."""
+    m = _ZENOH_RE.match(content.strip())
+    if not m:
+        return None
+    turns = max(1, min(int(m.group(3) or 3), 10))
+    return m.group(1).lower(), m.group(2).lower(), turns, m.group(4).strip()
+
 
 def _row_to_message(row) -> Message:
     is_bot = bool(row["is_bot"])
@@ -41,6 +55,7 @@ def _row_to_message(row) -> Message:
         is_bot=is_bot,
         bot_id=row["bot_id"],
         bot_triggered_by=row["bot_triggered_by"],
+        bot_hop_count=row["bot_hop_count"] or 0,
         created_at=row["created_at"],
     )
 
@@ -129,6 +144,54 @@ async def post_message(
 
     # Emit SSE for user message
     await broker.publish(room_id, {"type": "message", "message": user_message.model_dump()})
+
+    # /zenoh A2A council command — intercept before normal @mention handling
+    zenoh_parsed = _parse_zenoh_command(body.content)
+    if zenoh_parsed is not None:
+        bot1_name, bot2_name, turns, prompt = zenoh_parsed
+        bot1_row = db.execute(
+            "SELECT * FROM room_bots WHERE room_id = ? AND LOWER(name) = ?",
+            (room_id, bot1_name),
+        ).fetchone()
+        bot2_row = db.execute(
+            "SELECT * FROM room_bots WHERE room_id = ? AND LOWER(name) = ?",
+            (room_id, bot2_name),
+        ).fetchone()
+
+        if not bot1_row or not bot2_row:
+            missing = [
+                f"@{n}" for n, r in [(bot1_name, bot1_row), (bot2_name, bot2_row)] if not r
+            ]
+            err_id = str(uuid.uuid4())
+            err_at = datetime.utcnow().isoformat() + "Z"
+            err_text = f"[A2A Error] Bots not found in this room: {', '.join(missing)}"
+            db.execute(
+                "INSERT INTO messages (id, room_id, user_id, content, is_bot, bot_id, bot_triggered_by, created_at) VALUES (?, ?, ?, ?, 0, NULL, NULL, ?)",
+                (err_id, room_id, current_user.id, err_text, err_at),
+            )
+            db.commit()
+            await broker.publish(
+                room_id,
+                {"type": "message", "message": Message(
+                    id=err_id, room_id=room_id, user_id=current_user.id,
+                    username=current_user.username, content=err_text,
+                    is_bot=False, created_at=err_at,
+                ).model_dump()},
+            )
+            return user_message
+
+        from ..services.a2a import run_a2a_session
+        asyncio.create_task(
+            run_a2a_session(
+                room_id=room_id,
+                bot1=BotConfig(**dict(bot1_row)),
+                bot2=BotConfig(**dict(bot2_row)),
+                prompt=prompt,
+                turns=turns,
+                triggering_user_id=current_user.id,
+            )
+        )
+        return user_message
 
     # Check if message mentions a bot (@botname anywhere in the message)
     content = body.content.strip()

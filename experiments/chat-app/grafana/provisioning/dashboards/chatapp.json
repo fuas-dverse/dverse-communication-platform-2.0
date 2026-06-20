@@ -157,7 +157,7 @@
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background" },
       "targets": [
         {
-          "expr": "sum(rate(chatapp_llm_requests_total{status=\"error\"}[5m])) / sum(rate(chatapp_llm_requests_total[5m]))",
+          "expr": "(sum(rate(chatapp_llm_requests_total{status=\"error\"}[5m])) or vector(0)) / sum(rate(chatapp_llm_requests_total[5m]))",
           "legendFormat": "Error rate",
           "refId": "A"
         }
@@ -166,8 +166,39 @@
       "type": "stat"
     },
     {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 18 },
+      "id": 8,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "sum by (llm_provider) (rate(chatapp_llm_tokens_input_total[1m]))",
+          "legendFormat": "input / {{llm_provider}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (llm_provider) (rate(chatapp_llm_tokens_output_total[1m]))",
+          "legendFormat": "output / {{llm_provider}}",
+          "refId": "B"
+        }
+      ],
+      "title": "LLM Token Rate (tokens/s)",
+      "type": "timeseries"
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
       "id": 12,
       "title": "Zenoh Bot",
       "type": "row"
@@ -182,7 +213,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
       "id": 6,
       "options": {
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
@@ -208,7 +239,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
       "id": 7,
       "options": {
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
@@ -227,6 +258,132 @@
         }
       ],
       "title": "Zenoh Round-Trip Duration (p50 / p95)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "id": 13,
+      "title": "A2A Council",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 37 },
+      "id": 14,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "sum by (a2a_bot1, a2a_bot2) (rate(chatapp_a2a_sessions_total[1m]))",
+          "legendFormat": "{{a2a_bot1}} vs {{a2a_bot2}}",
+          "refId": "A"
+        }
+      ],
+      "title": "A2A Session Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
+      "id": 15,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, a2a_bot1, a2a_bot2) (rate(chatapp_a2a_session_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{a2a_bot1}} vs {{a2a_bot2}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, a2a_bot1, a2a_bot2) (rate(chatapp_a2a_session_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{a2a_bot1}} vs {{a2a_bot2}}",
+          "refId": "B"
+        }
+      ],
+      "title": "A2A Session Duration (p50 / p95)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 45 },
+      "id": 16,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, a2a_bot1, a2a_bot2) (rate(chatapp_a2a_turns_bucket[5m])))",
+          "legendFormat": "p95 turns {{a2a_bot1}} vs {{a2a_bot2}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, a2a_bot1, a2a_bot2) (rate(chatapp_a2a_turns_bucket[5m])))",
+          "legendFormat": "p50 turns {{a2a_bot1}} vs {{a2a_bot2}}",
+          "refId": "B"
+        }
+      ],
+      "title": "A2A Turns per Session (p50 / p95)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 45 },
+      "id": 17,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, a2a_bot1, a2a_bot2, a2a_speaker) (rate(chatapp_a2a_turn_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{a2a_speaker}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, a2a_bot1, a2a_bot2, a2a_speaker) (rate(chatapp_a2a_turn_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{a2a_speaker}}",
+          "refId": "B"
+        }
+      ],
+      "title": "A2A Turn Duration (p50 / p95)",
       "type": "timeseries"
     }
   ],
@@ -253,5 +410,5 @@
   "timezone": "browser",
   "title": "ChatApp",
   "uid": "chatapp-main",
-  "version": 2
+  "version": 3
 }

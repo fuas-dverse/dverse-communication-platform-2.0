@@ -317,6 +317,7 @@ class TestRowToMessage(unittest.TestCase):
             "bot_id": None,
             "bot_name": None,
             "bot_triggered_by": None,
+            "bot_hop_count": 0,
             "created_at": "2024-01-01T00:00:00Z",
         }
         defaults.update(overrides)
