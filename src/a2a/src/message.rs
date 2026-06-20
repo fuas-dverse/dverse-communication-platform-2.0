@@ -45,3 +45,76 @@ impl A2AMessage {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_msg() -> A2AMessage {
+        A2AMessage::new("agent-a", "agent-b", "hello".to_string(), 1)
+    }
+
+    #[test]
+    fn new_id_format() {
+        let msg = make_msg();
+        assert!(msg.id.starts_with("agent-a-turn1-"));
+        assert_eq!(msg.turn, 1);
+    }
+
+    #[test]
+    fn serde_roundtrip() {
+        let mut msg = make_msg();
+        msg.thinking = Some("some thought".to_string());
+        let json = serde_json::to_string(&msg).unwrap();
+        let decoded: A2AMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.from, msg.from);
+        assert_eq!(decoded.to, msg.to);
+        assert_eq!(decoded.content, msg.content);
+        assert_eq!(decoded.thinking, msg.thinking);
+        assert_eq!(decoded.turn, msg.turn);
+    }
+
+    #[test]
+    fn thinking_omitted_when_none() {
+        let msg = make_msg();
+        let json = serde_json::to_string(&msg).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(v.get("thinking").is_none());
+    }
+
+    #[test]
+    fn thinking_present_when_some() {
+        let mut msg = make_msg();
+        msg.thinking = Some("deep thought".to_string());
+        let json = serde_json::to_string(&msg).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["thinking"], "deep thought");
+    }
+
+    #[test]
+    fn deser_missing_required_field() {
+        // "from" field is missing
+        let json = r#"{"to":"agent-b","content":"hi","timestamp_secs":0,"turn":1,"id":"x"}"#;
+        let result: Result<A2AMessage, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn deser_extra_unknown_fields() {
+        let json = r#"{"id":"x","from":"a","to":"b","content":"hi","timestamp_secs":0,"turn":1,"unknown_key":"value"}"#;
+        let result: Result<A2AMessage, _> = serde_json::from_str(json);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn deser_empty_bytes() {
+        let result: Result<A2AMessage, _> = serde_json::from_slice(&[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn deser_invalid_utf8() {
+        let result: Result<A2AMessage, _> = serde_json::from_slice(&[0xFF, 0xFE]);
+        assert!(result.is_err());
+    }
+}
