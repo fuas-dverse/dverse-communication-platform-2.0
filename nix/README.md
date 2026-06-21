@@ -12,7 +12,7 @@ the upstream personal repo.
 
     nix/
     ├── flake.nix                          # inputs + nixosModules + nixosConfigurations
-    ├── .sops.yaml                         # sops recipient template (edit before use)
+    ├── .sops.yaml                         # sops recipient config (admin + dverse-ca server)
     ├── README.md
     ├── modules/services/
     │   ├── step-ca.nix                    # custom services.step-ca module
@@ -24,7 +24,8 @@ the upstream personal repo.
     │   ├── vm-test.nix                    # sops-free QEMU test variant
     │   └── hardware-configuration.nix     # **stub** — replace per-target
     └── secrets/
-        └── dverse-ca.example.yaml         # plaintext schema template
+        ├── dverse-ca.yaml                 # sops-encrypted (admin + dverse-ca server)
+        └── dverse-ca.example.yaml         # plaintext schema (reference only)
 
 ## Inputs
 
@@ -156,44 +157,59 @@ Minimal local-testing run:
 
    Without this, the only way in after deploy is the serial console.
 
-3. **Bootstrap secrets** (see next section).
-
-4. **Build / deploy** as usual:
+3. **Build / deploy** as usual:
 
        nixos-rebuild switch --flake .#dverse-ca --target-host root@<host>
 
-## Secrets bootstrap
+   The secrets travel with the flake (see next section) — no extra
+   provisioning step is required on the target as long as its ssh host
+   key matches the `server_dverse_ca` recipient in `.sops.yaml`.
 
-`sops-nix` decrypts secrets at activation time using the target host's
-`/etc/ssh/ssh_host_ed25519_key`, transparently converted to an age identity.
-No separate keyfile is provisioned on the server.
+## Secrets
 
-Steps:
+`nix/secrets/dverse-ca.yaml` is sops-encrypted to the two recipients
+listed in `nix/.sops.yaml`:
 
-1. Generate an admin age key on your workstation if you don't have one:
+| Alias                 | What it is                                                |
+| --------------------- | --------------------------------------------------------- |
+| `admin_daki4_laptop`  | The admin's workstation age key (decrypt locally to edit) |
+| `server_dverse_ca`    | The dverse-ca server's ssh host key, via `ssh-to-age`     |
+
+`sops-nix` decrypts at activation time on the server using
+`/etc/ssh/ssh_host_ed25519_key`, transparently converted to an age
+identity — no separate keyfile is provisioned. To deploy to the existing
+dverse-ca host you don't need to touch these files at all.
+
+`nix/secrets/dverse-ca.example.yaml` keeps the plaintext schema for
+reference and is **not** consumed by any module.
+
+### Adding another operator
+
+1. Have them generate an age key:
 
        age-keygen -o ~/.config/sops/age/keys.txt
 
-2. Derive the server's age public key from its ssh host key (run on the
-   target after a base install):
+2. Append their age public key to `nix/.sops.yaml` under `keys:` and
+   reference it in the `dverse-ca.yaml` rule's `key_groups.age` list.
 
-       nix run nixpkgs#ssh-to-age -- -i /etc/ssh/ssh_host_ed25519_key.pub
+3. Re-encrypt with the new recipient set:
 
-3. Edit `nix/.sops.yaml`: replace `age1REPLACEME...` lines with the two
-   real recipients (workstation pubkey + server pubkey).
+       sops updatekeys nix/secrets/dverse-ca.yaml
 
-4. Copy the schema template and fill in real values:
+### Deploying to a different host
 
-       cp nix/secrets/dverse-ca.example.yaml nix/secrets/dverse-ca.yaml
-       $EDITOR nix/secrets/dverse-ca.yaml
-       sops --encrypt --in-place nix/secrets/dverse-ca.yaml
+The server recipient is derived from `dverse-ca`'s ssh host key. To
+target a different machine, derive its age pubkey on the box itself:
 
-5. Commit `nix/secrets/dverse-ca.yaml` (encrypted). Do **not** commit the
-   plaintext copy.
+    nix run nixpkgs#ssh-to-age -- -i /etc/ssh/ssh_host_ed25519_key.pub
 
-If you later rotate recipients, update `.sops.yaml` and run:
+Add it as a new recipient in `.sops.yaml` (or replace `server_dverse_ca`)
+and `sops updatekeys` as above.
 
-    sops updatekeys nix/secrets/dverse-ca.yaml
+### Rotating values
+
+Run `sops nix/secrets/dverse-ca.yaml` to open the decrypted file in your
+editor; sops re-encrypts on save.
 
 ## What's intentionally not here
 
@@ -205,9 +221,6 @@ repo:
 - Personal editor / shell config (tmux, bash, neovim modules).
 - Other hosts and unused inputs (`home-manager`, `nixvim`,
   `nixpkgs-unstable`).
-- The real `dverse-ca.yaml` ciphertext — that file was encrypted to the
-  original author's keys and would be unusable here. Re-create it locally
-  with your own recipients per the bootstrap steps above.
 
 ## Provenance
 

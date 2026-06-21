@@ -1,26 +1,25 @@
 # nix/.sops.yaml — sops creation rules for the dverse-ca flake.
 #
-# Two recipients are expected:
-#   1. An admin age key (your laptop / deploy workstation), generated with
+# Two recipients are configured:
+#   1. The admin age key (Yordan's workstation), generated with
 #      `age-keygen -o ~/.config/sops/age/keys.txt`.
-#   2. The target server's ssh ed25519 host key, converted to an age public
-#      key with `ssh-to-age`. sops-nix re-derives the same identity at
-#      activation time on the host (see modules/system sops wiring in
-#      hosts/dverse-ca/configuration.nix).
+#   2. The dverse-ca server's ssh ed25519 host key, converted to an age
+#      public key with `ssh-to-age`. sops-nix re-derives the same identity
+#      at activation time on the host (see hosts/dverse-ca/configuration.nix
+#      `sops.age.sshKeyPaths`).
 #
-# Replace the two placeholder age1... values with your own before running
-# `sops` against any file under nix/secrets/. After editing, re-encrypt
-# existing files with:
+# Adding a new operator: append their age public key under `keys:`, add an
+# alias under the dverse-ca rule below, then re-encrypt the existing file:
 #
 #     sops updatekeys nix/secrets/dverse-ca.yaml
 
 keys:
-  - &admin_workstation  age1REPLACEMEadminworkstationpublickeyREPLACEMEXXXXXXXXXXXXXX
-  - &server_dverse_ca   age1REPLACEMEserverdversecapublickeyREPLACEMEXXXXXXXXXXXXXXX
+  - &admin_daki4_laptop  age1lmqu6xhpcjye6zcptjqv5msxhvlvnncczxx4wuzy3xk9ttq8je2su3y3qd
+  - &server_dverse_ca    age16nh8dd6stnun6ludd03de7m66ddkk3p96muu9jks9g7am7wh7e3sqr34v4
 
 creation_rules:
   - path_regex: secrets/dverse-ca\.yaml$
     key_groups:
       - age:
-          - *admin_workstation
+          - *admin_daki4_laptop
           - *server_dverse_ca
