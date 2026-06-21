@@ -1,6 +1,6 @@
 # DVerse Communication Platform 2.0
 
-> A distributed multi-agent social communication platform for humans and AI — built for small groups to collaborate, co-create, and decide together.
+> A distributed multi-agent social communication platform for humans and AI, built for small groups to collaborate, co-create, and decide together.
 
 Part of the Interaction Design (IXD) Research Group at Fontys ICT, Eindhoven. Supervised by Marc van Grootel.
 
