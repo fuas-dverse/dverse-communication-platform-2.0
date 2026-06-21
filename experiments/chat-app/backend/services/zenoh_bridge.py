@@ -240,7 +240,7 @@ class ZenohBridge:
         except Exception as exc:
             print(f"[Zenoh] _on_room_message error: {exc}")
 
-def _on_response(self, sample):
+    def _on_response(self, sample):
         """Called from Zenoh's internal thread — must not touch asyncio directly."""
         try:
             data = json.loads(bytes(sample.payload.to_bytes()).decode("utf-8"))
@@ -251,8 +251,9 @@ def _on_response(self, sample):
                 if not future.done():
                     self._loop.call_soon_threadsafe(future.set_result, content_text)
         except Exception as exc:
-            print(f"[Zenoh] _on_response error: {exc}"
-   # ── Shared handlers ────────────────────────────────────────────────────────
+            print(f"[Zenoh] _on_response error: {exc}")
+
+    # ── Shared handlers ────────────────────────────────────────────────────────
 
     def _handle_node_announce(self, data: dict):
         cn = data.get("cn", "")
@@ -311,6 +312,23 @@ def _on_response(self, sample):
             )
             db.commit()
             event_type = "message"
+
+        message = {
+            "id": msg_id,
+            "room_id": room_id,
+            "user_id": "zenoh",
+            "username": f"@{sender}",
+            "content": content,
+            "is_bot": True,
+            "bot_id": bot_id,
+            "bot_triggered_by": None,
+            "created_at": created_at,
+        }
+        asyncio.run_coroutine_threadsafe(
+            self._broker.publish(room_id, {"type": event_type, "message": message}),
+            self._loop,
+        )
+
     async def request(
         self,
         room_id: str,
@@ -362,23 +380,6 @@ def _on_response(self, sample):
                 raise
             finally:
                 zenoh_duration.record(time.monotonic() - t0, {"zenoh.bot_name": bot_name})
-
-
-        message = {
-            "id": msg_id,
-            "room_id": room_id,
-            "user_id": "zenoh",
-            "username": f"@{sender}",
-            "content": content,
-            "is_bot": True,
-            "bot_id": bot_id,
-            "bot_triggered_by": None,
-            "created_at": created_at,
-        }
-        asyncio.run_coroutine_threadsafe(
-            self._broker.publish(room_id, {"type": event_type, "message": message}),
-            self._loop,
-        )
 
     # ── Cleanup ────────────────────────────────────────────────────────────────
 
