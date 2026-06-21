@@ -26,9 +26,8 @@ import backend.db as db_module
 import backend.routes.auth as auth_routes
 import backend.routes.messages as messages_routes
 import backend.routes.rooms as rooms_routes
-from backend.models.bot import BotConfigCreate, BotConfigUpdate, BotProvider, BotPersonality
+from backend.models.bot import BotConfigCreate, BotConfigUpdate, BotProvider
 from backend.models.message import MessageCreate
-from backend.models.room import RoomCreate
 from backend.models.user import User, UserCreate, UserLogin
 
 
