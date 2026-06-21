@@ -24,14 +24,14 @@ use anyhow::{anyhow, Result};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
 use bot_framework::control::{
-    kick_notice_topic, session_key_rotation_topic, KickNotice, SessionKeyRotation,
-    KICK_NOTICE_SUB, SESSION_KEY_ROTATION_SUB,
+    kick_notice_topic, kick_signing_bytes, session_key_rotation_topic, KickNotice,
+    SessionKeyRotation, KICK_NOTICE_SUB, SESSION_KEY_ROTATION_SUB,
 };
 use bot_framework::session_crypto::{
-    olm_decrypt_on_session, olm_encrypt_on_session, Curve25519PublicKey, GroupReceiver,
-    GroupSender, OlmMessage, SessionKey,
+    olm_decrypt_on_session, olm_encrypt_on_session, Curve25519PublicKey, Ed25519PublicKey,
+    Ed25519Signature, GroupReceiver, GroupSender, OlmMessage, SessionKey,
 };
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use zenoh::Session;
 
 use crate::state::{AppState, KickedState};
@@ -164,11 +164,23 @@ pub fn prepare_rotation(
         payloads.push((session_key_rotation_topic(cn), bytes));
     }
 
+    // Sign the canonical (kicked_cn, kicked_at, banned) bytes with the
+    // admin's vodozemac Ed25519 key. `reason` is intentionally not signed
+    // (see `kick_signing_bytes`). The wire field `admin_ed25519_key_b64`
+    // is informational — receivers verify against the Ed25519 they pinned
+    // at admission time (#145).
+    let kicked_at = unix_epoch_secs();
+    let crypto = st.crypto.as_ref().unwrap();
+    let signing_bytes = kick_signing_bytes(kicked_cn, &kicked_at, ban);
+    let sig = crypto.identity.sign(&signing_bytes);
+    let admin_ed25519_b64 = crypto.identity.ed25519_key_base64();
     let notice = KickNotice {
         kicked_cn: kicked_cn.to_string(),
         reason,
         banned: ban,
-        kicked_at: unix_epoch_secs(),
+        kicked_at,
+        admin_ed25519_sig_b64: sig.to_base64(),
+        admin_ed25519_key_b64: admin_ed25519_b64,
     };
     let notice_bytes =
         serde_json::to_vec(&notice).map_err(|e| anyhow!("serialize KickNotice: {e}"))?;
@@ -257,7 +269,52 @@ fn handle_kick(state: &Mutex<AppState>, my_cn: &str, payload: &[u8]) -> Result<(
         .map_err(|e| anyhow!("parse KickNotice: {e}"))?;
     if notice.kicked_cn != my_cn {
         // Broadcast topic — we subscribe broadly but only act on our own CN.
+        // Verifying notices targeted at other CNs is pointless work; we'd
+        // still ignore them. This short-circuit is purely a perf carve-out.
         return Ok(());
+    }
+    // Authenticity gate (#145): the notice MUST be signed by the admin we
+    // pinned at admission time. On failure we return Ok with a leakage-safe
+    // tracing line (do NOT log `kicked_cn`) and leave AppState untouched,
+    // which by construction keeps the member in the session.
+    //
+    // Anchor lookup is read-only under the same lock the teardown then
+    // re-acquires. We deliberately verify against the STORED admin
+    // Ed25519, not the notice-carried one. The notice's
+    // `admin_ed25519_key_b64` is informational; a mismatch with the
+    // stored anchor is itself a drop signal.
+    {
+        let st = state.lock().unwrap();
+        let Some(crypto) = st.crypto.as_ref() else {
+            debug!("kick verification skipped: no crypto state");
+            return Ok(());
+        };
+        let Some(anchor_b64) = crypto.session_admin_ed25519_b64.as_deref() else {
+            // No pinned admin identity — admission either hasn't completed
+            // or this node is the admin (admins don't kick themselves).
+            debug!("kick verification skipped: no pinned admin Ed25519 anchor");
+            return Ok(());
+        };
+        if anchor_b64 != notice.admin_ed25519_key_b64 {
+            warn!("dropping KickNotice: stored admin Ed25519 anchor differs from notice");
+            return Ok(());
+        }
+        let Ok(admin_pub) = Ed25519PublicKey::from_base64(anchor_b64) else {
+            warn!("dropping KickNotice: stored admin Ed25519 anchor unparseable");
+            return Ok(());
+        };
+        let Ok(sig) = Ed25519Signature::from_base64(&notice.admin_ed25519_sig_b64) else {
+            // Empty / malformed / wrong-length signature.
+            warn!("dropping KickNotice: signature unparseable or missing");
+            return Ok(());
+        };
+        let signing_bytes =
+            bot_framework::control::kick_signing_bytes(&notice.kicked_cn, &notice.kicked_at, notice.banned);
+        if admin_pub.verify(&signing_bytes, &sig).is_err() {
+            // Fields were mutated after signing, or signed by a non-admin.
+            warn!("dropping KickNotice: Ed25519 signature did not verify");
+            return Ok(());
+        }
     }
     // Tear down crypto + admission state and stage the Kicked screen. The
     // Tauri snapshot reads kicked_screen and routes the GUI; the embedded
@@ -572,48 +629,200 @@ mod tests {
         assert_eq!(pubs.kick_topic, "dverse/session/control/kick/bob");
     }
 
-    /// `handle_kick` for ourselves sets `kicked_screen` and clears the
-    /// inbound Megolm state; messages targeted at OTHER CNs leave state
-    /// untouched.
-    #[test]
-    fn handle_kick_routes_only_on_self_match() {
+    /// Test helper: build a member-side AppState with a single-slot pinned
+    /// admin Ed25519 anchor matching `admin`. Mirrors what the production
+    /// admission_handler::handle_decision path does on a successful Allow.
+    fn member_state_pinned_to(admin: &SessionIdentity) -> Mutex<AppState> {
         let mut s = AppState::new(None);
         s.crypto = Some(SessionCryptoState::new(false));
-        let state = Mutex::new(s);
+        s.crypto.as_mut().unwrap().session_admin_ed25519_b64 =
+            Some(admin.ed25519_key_base64());
+        Mutex::new(s)
+    }
 
-        // Notice for someone else — no-op.
-        let other = KickNotice {
-            kicked_cn: "alice".into(),
-            reason: None,
-            banned: false,
-            kicked_at: "0".into(),
-        };
-        super::handle_kick(
-            &state,
-            "bob",
-            &serde_json::to_vec(&other).unwrap(),
-        )
-        .unwrap();
+    /// Test helper: construct a signed KickNotice. Calls the SAME
+    /// canonical-bytes helper the production admin path uses — this is the
+    /// test-side mirror of the production single-source-of-truth, and is
+    /// what makes the "mutated after signing" tests faithful (no re-sign,
+    /// mutation happens on the constructed struct).
+    fn signed_kick_notice(
+        admin: &SessionIdentity,
+        kicked_cn: &str,
+        reason: Option<String>,
+        banned: bool,
+        kicked_at: &str,
+    ) -> KickNotice {
+        let bytes = bot_framework::control::kick_signing_bytes(kicked_cn, kicked_at, banned);
+        let sig = admin.sign(&bytes);
+        KickNotice {
+            kicked_cn: kicked_cn.into(),
+            reason,
+            banned,
+            kicked_at: kicked_at.into(),
+            admin_ed25519_sig_b64: sig.to_base64(),
+            admin_ed25519_key_b64: admin.ed25519_key_base64(),
+        }
+    }
+
+    /// Updated from the PR #144 baseline to know about the signing admin
+    /// and the pinned anchor (#145). Same contract: `handle_kick` for
+    /// ourselves sets `kicked_screen` and clears the inbound Megolm
+    /// state; messages targeted at OTHER CNs leave state untouched.
+    #[test]
+    fn handle_kick_routes_only_on_self_match() {
+        let admin = SessionIdentity::new();
+        let state = member_state_pinned_to(&admin);
+
+        // Notice for someone else — no-op (we never even verify; the
+        // self-match short-circuit returns before the auth gate).
+        let other = signed_kick_notice(&admin, "alice", None, false, "0");
+        super::handle_kick(&state, "bob", &serde_json::to_vec(&other).unwrap()).unwrap();
         assert!(state.lock().unwrap().kicked_screen.is_none());
 
         // Notice for us — Kicked screen, crypto torn down.
-        let mine = KickNotice {
-            kicked_cn: "bob".into(),
-            reason: Some("nope".into()),
-            banned: true,
-            kicked_at: "0".into(),
-        };
-        super::handle_kick(
-            &state,
-            "bob",
-            &serde_json::to_vec(&mine).unwrap(),
-        )
-        .unwrap();
+        let mine = signed_kick_notice(&admin, "bob", Some("nope".into()), true, "0");
+        super::handle_kick(&state, "bob", &serde_json::to_vec(&mine).unwrap()).unwrap();
         let s = state.lock().unwrap();
         let kicked = s.kicked_screen.as_ref().unwrap();
         assert_eq!(kicked.reason.as_deref(), Some("nope"));
         assert!(kicked.banned);
         assert!(s.crypto.as_ref().unwrap().group_receivers.is_empty());
         assert!(s.crypto.as_ref().unwrap().member_olm_session.is_none());
+    }
+
+    // ── Authenticity gate (#145) ──────────────────────────────────────────
+
+    /// Acceptance criterion: a valid kick verifies and the receiver tears
+    /// down.
+    #[test]
+    fn kick_verifies_with_admin_key() {
+        let admin = SessionIdentity::new();
+        let state = member_state_pinned_to(&admin);
+        let notice = signed_kick_notice(&admin, "bob", Some("ok".into()), false, "1750000000");
+        super::handle_kick(&state, "bob", &serde_json::to_vec(&notice).unwrap()).unwrap();
+        assert!(state.lock().unwrap().kicked_screen.is_some());
+    }
+
+    /// Acceptance criterion: mutating `kicked_cn` after signing must fail
+    /// verification. The receiver MUST stay in the session.
+    #[test]
+    fn kick_with_mutated_kicked_cn_fails_verify() {
+        let admin = SessionIdentity::new();
+        let state = member_state_pinned_to(&admin);
+        let mut notice =
+            signed_kick_notice(&admin, "bob", None, false, "1750000000");
+        // Mutate AFTER signing. Use a CN we then match self against so the
+        // self-match short-circuit doesn't hide the verify failure.
+        notice.kicked_cn = "carol".into();
+        super::handle_kick(&state, "carol", &serde_json::to_vec(&notice).unwrap()).unwrap();
+        let s = state.lock().unwrap();
+        assert!(s.kicked_screen.is_none(), "mutated kicked_cn must not tear down");
+        // Member is still in the session: crypto state retained.
+        assert!(s.crypto.is_some());
+    }
+
+    /// Acceptance criterion: mutating `kicked_at` after signing must fail
+    /// verification.
+    #[test]
+    fn kick_with_mutated_kicked_at_fails_verify() {
+        let admin = SessionIdentity::new();
+        let state = member_state_pinned_to(&admin);
+        let mut notice =
+            signed_kick_notice(&admin, "bob", None, false, "1750000000");
+        notice.kicked_at = "9999999999".into();
+        super::handle_kick(&state, "bob", &serde_json::to_vec(&notice).unwrap()).unwrap();
+        assert!(state.lock().unwrap().kicked_screen.is_none());
+    }
+
+    /// Acceptance criterion: mutating the `banned` flag after signing must
+    /// fail verification.
+    #[test]
+    fn kick_with_mutated_banned_flag_fails_verify() {
+        let admin = SessionIdentity::new();
+        let state = member_state_pinned_to(&admin);
+        let mut notice =
+            signed_kick_notice(&admin, "bob", None, false, "1750000000");
+        notice.banned = true;
+        super::handle_kick(&state, "bob", &serde_json::to_vec(&notice).unwrap()).unwrap();
+        assert!(state.lock().unwrap().kicked_screen.is_none());
+    }
+
+    /// Acceptance criterion: a notice signed by a different admitted
+    /// member (not the admin) must fail verification. We populate the
+    /// notice's carried key with the impostor's Ed25519 too — the stored
+    /// anchor mismatch is itself a drop signal.
+    #[test]
+    fn kick_signed_by_non_admin_member_fails_verify() {
+        let admin = SessionIdentity::new();
+        let impostor = SessionIdentity::new();
+        let state = member_state_pinned_to(&admin);
+        // Impostor builds a complete, internally-consistent notice (their
+        // sig over the canonical bytes, their carried Ed25519 key) — but
+        // the stored anchor is the admin's, so the carried-key check trips
+        // first.
+        let notice =
+            signed_kick_notice(&impostor, "bob", Some("zap".into()), true, "1750000000");
+        super::handle_kick(&state, "bob", &serde_json::to_vec(&notice).unwrap()).unwrap();
+        assert!(state.lock().unwrap().kicked_screen.is_none());
+    }
+
+    /// Acceptance criterion: a notice with a missing (empty-string)
+    /// signature must fail verification.
+    #[test]
+    fn kick_with_missing_signature_fails_verify() {
+        let admin = SessionIdentity::new();
+        let state = member_state_pinned_to(&admin);
+        let mut notice =
+            signed_kick_notice(&admin, "bob", None, true, "1750000000");
+        notice.admin_ed25519_sig_b64 = String::new();
+        super::handle_kick(&state, "bob", &serde_json::to_vec(&notice).unwrap()).unwrap();
+        assert!(state.lock().unwrap().kicked_screen.is_none());
+
+        // Same contract with the all-zeros sig form.
+        let mut notice2 =
+            signed_kick_notice(&admin, "bob", None, true, "1750000000");
+        notice2.admin_ed25519_sig_b64 = base64::Engine::encode(&B64, [0u8; 64]);
+        super::handle_kick(&state, "bob", &serde_json::to_vec(&notice2).unwrap()).unwrap();
+        assert!(state.lock().unwrap().kicked_screen.is_none());
+    }
+
+    /// Design-pinning test: `reason` is intentionally NOT part of the
+    /// canonical signing bytes (it's display copy only — see the
+    /// `kick_signing_bytes` doc). Mutating it after signing therefore
+    /// MUST still verify and tear down. Pair-test for
+    /// `kick_with_mutated_*_fails_verify`: if the design ever flips to
+    /// include `reason` in the canonical form, this test catches that
+    /// change at compile-test time and forces the doc note to be updated.
+    #[test]
+    fn kick_with_mutated_reason_still_verifies() {
+        let admin = SessionIdentity::new();
+        let state = member_state_pinned_to(&admin);
+        let mut notice = signed_kick_notice(
+            &admin,
+            "bob",
+            Some("original copy".into()),
+            true,
+            "1750000000",
+        );
+        notice.reason = Some("admin fixed a typo".into());
+        super::handle_kick(&state, "bob", &serde_json::to_vec(&notice).unwrap()).unwrap();
+        let kicked = state.lock().unwrap().kicked_screen.clone().unwrap();
+        assert_eq!(kicked.reason.as_deref(), Some("admin fixed a typo"));
+    }
+
+    /// Anchor-mismatch belt-and-suspenders: even if the notice carries a
+    /// valid sig from key X, and the stored anchor is key Y ≠ X, the
+    /// carried-key vs anchor mismatch short-circuits before the verify
+    /// call. This pins the "verify against STORED anchor, not the notice
+    /// field" semantics so a future refactor can't accidentally swap them.
+    #[test]
+    fn kick_with_carried_key_mismatching_anchor_fails_verify() {
+        let admin = SessionIdentity::new();
+        let other = SessionIdentity::new();
+        // Anchor pinned to `admin`; impostor signs as `other`.
+        let state = member_state_pinned_to(&admin);
+        let notice = signed_kick_notice(&other, "bob", None, false, "0");
+        super::handle_kick(&state, "bob", &serde_json::to_vec(&notice).unwrap()).unwrap();
+        assert!(state.lock().unwrap().kicked_screen.is_none());
     }
 }
