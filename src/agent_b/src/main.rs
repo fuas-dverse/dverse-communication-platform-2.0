@@ -1,4 +1,5 @@
 use a2a::{
+    extract_think,
     llm::{ChatMessage, OllamaClient, OLLAMA_DEFAULT_MODEL, OLLAMA_DEFAULT_URL},
     message::{A2AMessage, AGENT_A_INBOX, AGENT_A_NAME, AGENT_B_INBOX, AGENT_B_NAME},
 };
@@ -11,16 +12,6 @@ const SYSTEM_PROMPT: &str = "You are Agent B, a pragmatic and direct AI in a \
     peer-to-peer dialogue over a distributed Zenoh network. \
     You are exchanging ideas with Agent A, another AI agent. \
     Keep each response to 2-3 sentences. Be concrete and insightful.";
-
-/// Split raw model output into (thinking, response).
-fn extract_think(raw: &str) -> (Option<&str>, &str) {
-    if let (Some(open), Some(close)) = (raw.find("<think>"), raw.find("</think>")) {
-        let thinking = raw[open + 7..close].trim();
-        let response = raw[close + 8..].trim();
-        return (Some(thinking), response);
-    }
-    (None, raw.trim())
-}
 
 fn print_thinking(thinking: &str) {
     println!("  ┌─ Agent B thinking ──────────────────────────");

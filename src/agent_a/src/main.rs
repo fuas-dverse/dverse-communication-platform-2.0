@@ -2,6 +2,7 @@ use std::io::Write as _;
 use std::time::Duration;
 
 use a2a::{
+    extract_think,
     llm::{ChatMessage, OllamaClient, OLLAMA_DEFAULT_MODEL, OLLAMA_DEFAULT_URL},
     message::{A2AMessage, AGENT_A_INBOX, AGENT_A_NAME, AGENT_B_INBOX, AGENT_B_NAME},
 };
@@ -23,18 +24,6 @@ const COUNCIL_SYSTEM: &str = "You are Agent A in a peer-to-peer AI council delib
 const SYNTHESIS_SYSTEM: &str = "You are Agent A synthesizing the outcome of an AI council. \
     Produce a clear, unified response that captures the consensus and key insights \
     from the discussion. Address the user's original query directly.";
-
-/// Split raw model output into (thinking, response).
-/// Returns (Some(think_text), response) when a <think>…</think> block is present,
-/// (None, full_text) otherwise.
-fn extract_think(raw: &str) -> (Option<&str>, &str) {
-    if let (Some(open), Some(close)) = (raw.find("<think>"), raw.find("</think>")) {
-        let thinking = raw[open + 7..close].trim();
-        let response = raw[close + 8..].trim();
-        return (Some(thinking), response);
-    }
-    (None, raw.trim())
-}
 
 fn print_thinking(agent: &str, thinking: &str) {
     println!("  ┌─ {agent} thinking ──────────────────────────");

@@ -11,9 +11,8 @@ from .routes import zenoh_session
 from .telemetry import setup_telemetry
 
 load_dotenv()
-setup_logfire()
-
 _otel_enabled = setup_telemetry()
+setup_logfire()
 
 app = FastAPI(title="ChatApp API")
 logfire.instrument_fastapi(app)

@@ -21,6 +21,8 @@ import time
 import uuid
 from typing import Optional
 
+from opentelemetry.trace import Status, StatusCode
+
 
 PRESENCE_TTL = 90  # seconds
 
@@ -59,6 +61,7 @@ class ZenohBridge:
         self._ws_host: str = ""
         self.available = False
         self._broker = None         # injected after broker is initialised
+        self._pending: dict[str, asyncio.Future] = {}
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -213,6 +216,9 @@ class ZenohBridge:
             self._subs.append(self._session.declare_subscriber(
                 "dverse/rooms/*/messages", self._on_room_message_raw,
             ))
+            self._subs.append(self._session.declare_subscriber(
+                "chat/response/**", self._on_response,
+            ))
             self.available = True
             print(f"[Zenoh] Direct connected to {router}")
         except Exception as exc:
@@ -233,6 +239,19 @@ class ZenohBridge:
                 self._handle_room_message(data)
         except Exception as exc:
             print(f"[Zenoh] _on_room_message error: {exc}")
+
+    def _on_response(self, sample):
+        """Called from Zenoh's internal thread — must not touch asyncio directly."""
+        try:
+            data = json.loads(bytes(sample.payload.to_bytes()).decode("utf-8"))
+            request_id = data.get("request_id")
+            content_text = data.get("content", "")
+            if request_id and request_id in self._pending:
+                future = self._pending.pop(request_id)
+                if not future.done():
+                    self._loop.call_soon_threadsafe(future.set_result, content_text)
+        except Exception as exc:
+            print(f"[Zenoh] _on_response error: {exc}")
 
     # ── Shared handlers ────────────────────────────────────────────────────────
 
@@ -309,6 +328,58 @@ class ZenohBridge:
             self._broker.publish(room_id, {"type": event_type, "message": message}),
             self._loop,
         )
+
+    async def request(
+        self,
+        room_id: str,
+        bot_name: str,
+        message: str,
+        history: list[dict],
+        timeout: float = 60.0,
+    ) -> str:
+        if not self.available:
+            raise RuntimeError("Zenoh router is not reachable. Is it running?")
+
+        from ..telemetry import tracer, zenoh_duration
+
+        request_id = str(uuid.uuid4())
+        loop = asyncio.get_event_loop()
+        future: asyncio.Future = loop.create_future()
+        self._pending[request_id] = future
+
+        payload = json.dumps({
+            "request_id": request_id,
+            "room_id": room_id,
+            "bot_name": bot_name,
+            "message": message,
+            "history": history,
+        }).encode()
+
+        with tracer.start_as_current_span("zenoh.bot_request") as span:
+            span.set_attribute("zenoh.room_id", room_id)
+            span.set_attribute("zenoh.bot_name", bot_name)
+            span.set_attribute("zenoh.request_id", request_id)
+            span.set_attribute("zenoh.timeout", timeout)
+            t0 = time.monotonic()
+            try:
+                await loop.run_in_executor(
+                    None,
+                    lambda: self._session.put(f"chat/{room_id}/request/{bot_name}", payload),
+                )
+                return await asyncio.wait_for(future, timeout=timeout)
+            except asyncio.TimeoutError:
+                self._pending.pop(request_id, None)
+                span.set_status(Status(StatusCode.ERROR, "timeout"))
+                raise TimeoutError(
+                    f"@{bot_name} did not respond within {timeout}s. "
+                    "Is the bot agent running and connected to the Zenoh router?"
+                )
+            except Exception as exc:
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
+                raise
+            finally:
+                zenoh_duration.record(time.monotonic() - t0, {"zenoh.bot_name": bot_name})
 
     # ── Cleanup ────────────────────────────────────────────────────────────────
 
