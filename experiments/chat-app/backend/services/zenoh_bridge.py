@@ -182,6 +182,8 @@ class ZenohBridge:
                             self._handle_room_message(data)
                         elif "cn" in data:
                             self._handle_node_announce(data)
+                        else:
+                            print(f"[Zenoh] WS unhandled: {raw[:300]}")
                     except Exception as exc:
                         print(f"[Zenoh] WS message error: {exc}")
         except Exception as exc:
@@ -274,41 +276,59 @@ class ZenohBridge:
         if not self._loop or not self._broker:
             return
         room_id = data.get("room_id", "")
-        sender = data.get("sender", "zenoh-agent")
+        sender = data.get("sender", data.get("from", "zenoh-agent"))
         content = data.get("content", "")
         msg_id = data.get("id", str(uuid.uuid4()))
-        created_at = data.get("created_at", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+        created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
         if not room_id or not content:
             return
 
         from ..db import get_db
         db = get_db()
+
+        # Try exact name match first, then strip domain suffix (CN format)
+        short_sender = sender.split(".")[0].lower()
         bot_row = db.execute(
-            "SELECT id FROM room_bots WHERE room_id = ? AND LOWER(name) = ?",
-            (room_id, sender.lower()),
+            "SELECT id, name FROM room_bots WHERE room_id = ? AND (LOWER(name) = ? OR LOWER(name) = ?)",
+            (room_id, sender.lower(), short_sender),
         ).fetchone()
         bot_id = bot_row["id"] if bot_row else None
+        display_name = bot_row["name"] if bot_row else sender
 
+        # Find placeholder: first by bot_id, then fall back to any recent "thinking..." in room
         placeholder = None
         if bot_id:
             placeholder = db.execute(
                 "SELECT id FROM messages WHERE room_id = ? AND bot_id = ? AND content = 'thinking...' ORDER BY created_at DESC LIMIT 1",
                 (room_id, bot_id),
             ).fetchone()
+        if not placeholder:
+            placeholder = db.execute(
+                "SELECT id, bot_id FROM messages WHERE room_id = ? AND content = 'thinking...' ORDER BY created_at DESC LIMIT 1",
+                (room_id,),
+            ).fetchone()
+            if placeholder and not bot_id:
+                bot_id = placeholder["bot_id"]
+
+        print(f"[Zenoh] _handle_room_message: sender={sender} bot_id={bot_id} placeholder={placeholder is not None} room={room_id}")
 
         if placeholder:
             db.execute(
-                "UPDATE messages SET content = ?, created_at = ? WHERE id = ?",
-                (content, created_at, placeholder["id"]),
+                "UPDATE messages SET content = ? WHERE id = ?",
+                (content, placeholder["id"]),
             )
             db.commit()
             msg_id = placeholder["id"]
             event_type = "replace"
         else:
+            # No placeholder — insert as new bot message if we have a valid user to attach to
+            system_user = db.execute("SELECT id FROM users LIMIT 1").fetchone()
+            if not system_user:
+                return
             db.execute(
-                "INSERT OR IGNORE INTO messages (id, room_id, user_id, content, is_bot, bot_id, bot_triggered_by, created_at, bot_hop_count) VALUES (?, ?, 'zenoh', ?, 1, ?, NULL, ?, 0)",
-                (msg_id, room_id, content, bot_id, created_at),
+                "INSERT OR IGNORE INTO messages (id, room_id, user_id, content, is_bot, bot_id, bot_triggered_by, created_at, bot_hop_count) VALUES (?, ?, ?, ?, 1, ?, NULL, ?, 0)",
+                (msg_id, room_id, system_user["id"], content, bot_id, created_at),
             )
             db.commit()
             event_type = "message"
@@ -317,7 +337,7 @@ class ZenohBridge:
             "id": msg_id,
             "room_id": room_id,
             "user_id": "zenoh",
-            "username": f"@{sender}",
+            "username": f"@{display_name}",
             "content": content,
             "is_bot": True,
             "bot_id": bot_id,
