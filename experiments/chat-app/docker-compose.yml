@@ -37,19 +37,6 @@ services:
     networks:
       - chatapp
 
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: chatapp-frontend
-    ports:
-      - "5173:80"
-    depends_on:
-      - backend
-    restart: unless-stopped
-    networks:
-      - chatapp
-
   jaeger:
     image: jaegertracing/jaeger:latest
     container_name: chatapp-jaeger
