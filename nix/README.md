@@ -50,6 +50,94 @@ Inside the VM (root/root login):
     step ca health --ca-url https://localhost:9000 \
       --root /var/lib/step-ca/certs/root_ca.crt
 
+## Building OCI container images
+
+The flake also exposes two container images for operators who want to
+deploy step-ca or Keycloak outside of a full NixOS host (e.g. into an
+existing Kubernetes / Nomad / docker-compose setup). The images are
+reproducible Nix builds — they are tagged `nix` and **not** stamped with
+a git SHA. Re-tag on push if you want versioning.
+
+| Output                     | What it builds            | Approx size (gzipped) |
+| -------------------------- | ------------------------- | --------------------- |
+| `.#oci-step-ca` (default)  | `dverse/step-ca:nix`      | ~54 MiB               |
+| `.#oci-keycloak`           | `dverse/keycloak:nix`     | ~609 MiB              |
+
+Build:
+
+    cd nix
+    nix build .#oci-step-ca       # ./result is a gzipped docker-archive tar
+    nix build .#oci-keycloak
+
+Load into a local engine:
+
+    docker load < result
+    # or
+    podman load < result
+
+Push to a registry (no engine required) with skopeo:
+
+    skopeo copy docker-archive:./result \
+      docker://registry.example.com/dverse/step-ca:nix
+
+### step-ca image
+
+Mirrors the NixOS module's invocation
+(`step-ca --password-file <pw> <ca.json>`). Both images run as uid/gid
+`1000:1000` — chown your host mounts accordingly.
+
+Expected mounts:
+
+| Container path                  | Purpose                                    |
+| ------------------------------- | ------------------------------------------ |
+| `/etc/step-ca/ca.json`          | The `ca.json` produced by `step ca init`   |
+| `/run/secrets/step-ca-password` | File containing the intermediate-key password |
+| `/var/lib/step-ca`              | State volume (certs, db, secrets/)         |
+
+Exposed port: `9000/tcp` (HTTPS).
+
+Minimal run example:
+
+    docker run -d --name step-ca \
+      -p 9000:9000 \
+      -v /srv/step-ca/ca.json:/etc/step-ca/ca.json:ro \
+      -v /srv/step-ca/password:/run/secrets/step-ca-password:ro \
+      -v step-ca-data:/var/lib/step-ca \
+      dverse/step-ca:nix
+
+To override the entrypoint for ops (e.g. to run `step ca health`), pass
+`--entrypoint /bin/step`.
+
+### keycloak image
+
+Entrypoint is `kc.sh` with default `Cmd = ["start"]` (production mode).
+Override to `start-dev` for local testing. **Config is supplied via
+container env vars** — nothing is baked in.
+
+Minimum env vars for a production-mode start:
+
+| Variable                   | Example                                   |
+| -------------------------- | ----------------------------------------- |
+| `KC_DB`                    | `postgres`                                |
+| `KC_DB_URL`                | `jdbc:postgresql://db:5432/keycloak`      |
+| `KC_DB_USERNAME`           | `keycloak`                                |
+| `KC_DB_PASSWORD`           | `<secret>`                                |
+| `KC_HOSTNAME`              | `auth.example.com`                        |
+| `KEYCLOAK_ADMIN`           | `admin` (only honoured on first boot)     |
+| `KEYCLOAK_ADMIN_PASSWORD`  | `<secret>` (only honoured on first boot)  |
+
+Exposed ports: `8080/tcp`, `8443/tcp`.
+
+Postgres is **not** bundled — bring your own.
+
+Minimal local-testing run:
+
+    docker run -d --name keycloak \
+      -p 8080:8080 \
+      -e KEYCLOAK_ADMIN=admin \
+      -e KEYCLOAK_ADMIN_PASSWORD=admin \
+      dverse/keycloak:nix start-dev
+
 ## Deploying the real host
 
 1. **Replace the hardware module.** The shipped
