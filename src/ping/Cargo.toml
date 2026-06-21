@@ -10,6 +10,11 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 bot-framework = { path = "../bot_framework" }
+# Direct dep so ping can pass its own service.name into the OTLP
+# resource attributes instead of inheriting bot_framework::logging's
+# default.  Stdout-only behaviour is identical when
+# OTEL_EXPORTER_OTLP_ENDPOINT is unset.
+dverse-obs = { path = "../dverse_obs" }
 tokio = { version = "1", features = [
     "rt-multi-thread",
     "macros",

@@ -6,6 +6,7 @@ members = [
     "experiments/zenoh-chat-abel",
     "experiments/zenoh-ping-pong/ping",
     "experiments/zenoh-ping-pong/pong",
+    "src/dverse_obs",
     "src/bot_framework",
     "src/zenoh_router",
     "src/ping",

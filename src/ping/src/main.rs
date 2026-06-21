@@ -15,7 +15,12 @@ const NODE_NAME: &str = "ping";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    bot_framework::logging::init();
+    // Identify this process as "dverse-ping" in OTLP `service.name`
+    // when the OTLP exporter is enabled (i.e. when
+    // OTEL_EXPORTER_OTLP_ENDPOINT is set).  The stdout layer is added
+    // unconditionally inside dverse_obs::init, so local `cargo run`
+    // behaviour is unchanged when the env var is absent.
+    dverse_obs::init("dverse-ping");
     let cfg = DverseConfig::load()
         .expect("No dverse config found. Run the router first to log in.");
 

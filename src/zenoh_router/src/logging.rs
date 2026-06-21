@@ -20,30 +20,20 @@ use std::sync::{Arc, Mutex};
 
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
-use tracing_subscriber::layer::{Context, SubscriberExt};
+use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{fmt, EnvFilter, Layer};
+use tracing_subscriber::Layer;
 
 use crate::state::AppState;
 
-/// Install the global tracing subscriber.  Must be called once, early, from
-/// the router binary's `main` — `bot_framework::logging::init` is NOT used
-/// here because we want the extra GUI layer.  The default filter is sourced
-/// from `bot_framework::logging::DEFAULT_FILTER` so the CLI agents and the
-/// router stay in lockstep on verbosity defaults.
+/// Install the global tracing subscriber for the router binary.
+///
+/// Delegates the stdout + OTLP setup to `dverse_obs` so the router stays
+/// in lockstep with the other binaries (default filter, OTLP env-var
+/// gating, `service.name` resource attribute) and only contributes the
+/// GUI-panel layer on top.
 pub fn init_with_gui_sink(state: Arc<Mutex<AppState>>) {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(bot_framework::logging::DEFAULT_FILTER));
-
-    let fmt_layer = fmt::layer().with_target(true).with_level(true).compact();
-    let gui_layer = GuiLogLayer { state };
-
-    let _ = tracing_subscriber::registry()
-        .with(filter)
-        .with(fmt_layer)
-        .with(gui_layer)
-        .try_init();
+    dverse_obs::init_with_extra_layer("dverse-router", GuiLogLayer { state });
 }
 
 /// A `tracing` Layer that renders each event to a single line and appends it

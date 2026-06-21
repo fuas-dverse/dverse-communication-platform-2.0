@@ -20,24 +20,6 @@ services:
       - chatapp
 
   frontend:
-    image: node:22-alpine
-    container_name: chatapp-frontend
-    working_dir: /app
-    command: sh -c "npm install && npm run dev -- --host"
-    ports:
-      - "5173:5173"
-    environment:
-      - VITE_API_BASE=http://localhost:8080
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    depends_on:
-      - backend
-    restart: unless-stopped
-    networks:
-      - chatapp
-
-  frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -64,12 +46,27 @@ services:
     image: otel/opentelemetry-collector-contrib:latest
     container_name: chatapp-otelcol
     ports:
-      - "4317:4317"   # OTLP gRPC  (backend → collector)
+      - "4317:4317"   # OTLP gRPC  (backend / Rust services → collector)
       - "4318:4318"   # OTLP HTTP  (backend → collector, default)
     volumes:
       - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
     depends_on:
       - jaeger
+      - loki
+    restart: unless-stopped
+    networks:
+      - chatapp
+
+  loki:
+    image: grafana/loki:3.2.0
+    container_name: chatapp-loki
+    # No host port published — Loki is only spoken to from inside the
+    # compose network (collector pushes, Grafana queries).  Add
+    # `ports: ["3100:3100"]` here if you want to curl Loki directly from
+    # the host.
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki_data:/loki
     restart: unless-stopped
     networks:
       - chatapp
@@ -109,6 +106,7 @@ volumes:
   prometheus_data:
   grafana_data:
   backend_data:
+  loki_data:
 
 networks:
   chatapp:

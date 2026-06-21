@@ -1,11 +1,18 @@
 //! Tracing subscriber setup shared by every dverse binary.
 //!
-//! Without a subscriber installed, every `tracing::event!` call — including
-//! everything Zenoh, rustls, and our own crates emit — is silently dropped.
-//! That made silent failures like the inter-router mTLS handshake stalling
-//! (because the dialer never presented a client cert) invisible until
-//! someone read the code by hand.  This installs a sensible default so
-//! anything `warn` or `error` reaches stderr automatically.
+//! Historically this module installed its own [`tracing_subscriber`]
+//! stack directly.  As the chat-app grew an OTLP collector +
+//! Grafana/Jaeger backend, every binary started wanting the *same*
+//! "stdout-always, OTLP-when-the-collector-is-configured" behaviour —
+//! so the real implementation was lifted into the standalone
+//! [`dverse_obs`] crate.  This module remains as a thin compatibility
+//! shim so existing call sites
+//!
+//! ```text
+//! bot_framework::logging::init();
+//! ```
+//!
+//! continue to work without edits.
 //!
 //! Quiet by default; set `RUST_LOG` to drill in:
 //!
@@ -14,51 +21,34 @@
 //! RUST_LOG=info,zenoh::transport=trace    # everything info, plus the
 //!                                         # noisy transport layer
 //! ```
+//!
+//! To make logs queryable from Grafana, point the binary at the chat-app
+//! OTel collector (see `experiments/chat-app/docker-compose.yml`):
+//!
+//! ```text
+//! OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+//! OTEL_SERVICE_NAME=dverse-bot-framework \
+//! cargo run -p bot-framework
+//! ```
+//!
+//! When the endpoint env is unset the OTLP layer is skipped entirely —
+//! no network calls, no overhead — and behaviour matches the original
+//! stdout-only subscriber.
 
-use std::sync::OnceLock;
-
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-
-/// Default filter applied when `RUST_LOG` isn't set.  Our own crates at
-/// `info`; Zenoh, rustls, and the usual noisy transitives at `warn` so the
-/// log doesn't flood at default verbosity but errors/warns still surface.
+/// Default filter applied when `RUST_LOG` is unset.
 ///
-/// Public so the router (which installs its own subscriber to add the GUI
-/// layer) can apply exactly the same defaults without re-declaring them.
-pub const DEFAULT_FILTER: &str = concat!(
-    "info,",
-    "zenoh=warn,",
-    "zenoh_runtime=warn,",
-    "rustls=warn,",
-    "mio=warn,",
-    "hyper=warn,",
-    "reqwest=warn,",
-    "zbus=warn,",
-);
+/// Re-exported from [`dverse_obs::DEFAULT_FILTER`] so the router (which
+/// installs its own subscriber to layer a GUI sink on top) can apply
+/// exactly the same defaults without re-declaring them.
+pub use dverse_obs::DEFAULT_FILTER;
 
-/// Guards against double-install.  `tracing` only allows one global
-/// subscriber per process and panics on the second attempt; we want
-/// `init()` to be safe to call from any binary's `main` without coordination.
-static INIT: OnceLock<()> = OnceLock::new();
-
-/// Install the global tracing subscriber.  Idempotent: subsequent calls are
-/// no-ops.  Call this once near the top of `main()` in every binary.
+/// Install the global tracing subscriber.  Idempotent: subsequent calls
+/// are no-ops.  Call this once near the top of `main()` in every binary.
+///
+/// Delegates to [`dverse_obs::init`] under the default service name
+/// `"bot-framework"`.  Binaries that want a more specific
+/// `service.name` resource attribute should either set the
+/// `OTEL_SERVICE_NAME` env var or call [`dverse_obs::init`] directly.
 pub fn init() {
-    INIT.get_or_init(|| {
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
-
-        // fmt layer writes to stderr by default — keeps stdout clean for
-        // anything pipeline-like and matches the existing `eprintln!` UX
-        // in `AppState::push_log`.
-        let fmt_layer = fmt::layer()
-            .with_target(true)
-            .with_level(true)
-            .compact();
-
-        let _ = tracing_subscriber::registry()
-            .with(filter)
-            .with(fmt_layer)
-            .try_init();
-    });
+    dverse_obs::init("bot-framework");
 }

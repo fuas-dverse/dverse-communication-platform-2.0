@@ -42,6 +42,10 @@ keyring = { version = "3", features = ["sync-secret-service", "apple-native", "w
 x509-parser = "0.18"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# Shared OTLP-aware tracing bootstrap.  bot_framework::logging::init()
+# delegates to dverse_obs::init() so the framework binary and every
+# downstream service get the same OTLP behaviour from a single call site.
+dverse-obs = { path = "../dverse_obs" }
 vodozemac = "0.10.0"
 p256 = { version = "0.13.2", features = ["ecdsa", "pkcs8", "pem"] }
 
