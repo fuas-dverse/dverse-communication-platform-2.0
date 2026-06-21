@@ -69,6 +69,7 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
                 let mut s = state.lock().unwrap();
                 s.session_role = cfg.session_role.clone();
                 s.session_id = session_id.clone();
+                s.active_config = Some(cfg.clone());
                 s.crypto = Some(SessionCryptoState::new(is_admin));
                 s.admitted.clear();
                 s.pending_requests.clear();
