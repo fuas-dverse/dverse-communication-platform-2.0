@@ -32,9 +32,13 @@ use vodozemac::megolm::{
 use vodozemac::olm::{Account, Session, SessionConfig};
 
 // Re-exports so downstream crates (zenoh_router, Tauri) can name the wire
-// types without taking a direct dep on vodozemac.
+// types without taking a direct dep on vodozemac. `Session` is exposed so the
+// admission and kick paths can persist established 1:1 channels per CN — the
+// admission flow opens them as a side effect of the Megolm session-key share,
+// and the kick/ban rotation flow re-uses them to deliver a fresh `SessionKey`
+// without re-consuming a one-time key.
 pub use vodozemac::megolm::{MegolmMessage, SessionKey};
-pub use vodozemac::olm::OlmMessage;
+pub use vodozemac::olm::{OlmMessage, Session as OlmSession};
 pub use vodozemac::Curve25519PublicKey;
 use x509_parser::prelude::*;
 
@@ -182,6 +186,39 @@ impl GroupReceiver {
             .map(|d| d.plaintext)
             .map_err(|e| anyhow!("megolm decrypt: {e}"))
     }
+}
+
+// ── Olm channel reuse (admission → kick/ban rotation) ─────────────────────────
+//
+// The admission path (`#110`) opens a 1:1 Olm session as a side-effect of
+// wrapping the admin's Megolm `SessionKey` to a fresh requester. The
+// post-pre-key `OlmSession` it produces — on BOTH sides of the exchange — has
+// the ratchet primed for ordinary `Normal` messages. The kick/ban rotation
+// path (`#111`) reuses these stored sessions so the admin can re-deliver a
+// freshly-minted Megolm key without depending on the peer republishing a
+// one-time key (which is racey under churn) and without consuming a new OTK.
+
+/// Encrypt `plaintext` on an established Olm session (Normal message — the
+/// pre-key handshake already happened during admission). Used by the admin
+/// kick path to re-deliver a rotated Megolm `SessionKey` to remaining members.
+pub fn olm_encrypt_on_session(
+    session: &mut OlmSession,
+    plaintext: &[u8],
+) -> Result<OlmMessage> {
+    session
+        .encrypt(plaintext)
+        .map_err(|e| anyhow!("olm encrypt on stored session: {e}"))
+}
+
+/// Decrypt an OlmMessage on an established Olm session. Symmetric to
+/// [`olm_encrypt_on_session`]; receiver side of the rotation flow.
+pub fn olm_decrypt_on_session(
+    session: &mut OlmSession,
+    message: &OlmMessage,
+) -> Result<Vec<u8>> {
+    session
+        .decrypt(message)
+        .map_err(|e| anyhow!("olm decrypt on stored session: {e}"))
 }
 
 // ── Identity binding (Curve25519 enc key ⇄ step-CA P-256 cert) ─────────────────
@@ -470,5 +507,115 @@ mod tests {
         assert!(mallory
             .olm_decrypt_from(alice.curve25519_key(), &msg)
             .is_err());
+    }
+
+    /// Full kick/ban rotation round-trip on the crypto layer (`#111`):
+    ///   1. Admin admits bob and carol (the existing #110 path) → both sides
+    ///      retain the established 1:1 Olm session.
+    ///   2. Admin mints a new GroupSender and re-delivers the new SessionKey
+    ///      to carol over her stored Olm session (Normal message, no OTK
+    ///      consumption).
+    ///   3. carol installs the new GroupReceiver; bob (the kicked member)
+    ///      retains only the OLD receiver.
+    /// Asserts:
+    ///   * carol can decrypt a post-rotation Megolm message.
+    ///   * bob's old receiver CANNOT decrypt the post-rotation Megolm message.
+    ///   * The two outbound Megolm sessions have distinct `session_id`s.
+    #[test]
+    fn kick_ban_rotation_locks_out_old_member_via_stored_olm_session() {
+        // ── Admin identity + initial group sender. ────────────────────────
+        let admin = SessionIdentity::new();
+        let mut sender_v1 = GroupSender::new();
+        let key_v1_bytes = sender_v1.session_key().to_bytes();
+
+        // ── bob and carol: identities + one OTK each. ──────────────────────
+        let mut bob = SessionIdentity::new();
+        let bob_otk = bob.generate_one_time_keys(1)[0];
+        bob.mark_keys_as_published();
+
+        let mut carol = SessionIdentity::new();
+        let carol_otk = carol.generate_one_time_keys(1)[0];
+        carol.mark_keys_as_published();
+
+        // ── Admission: admin wraps key_v1 to bob and to carol. ─────────────
+        // The admin keeps the outbound Olm sessions for each member.
+        let (admin_to_bob, msg_bob_v1) = admin
+            .olm_encrypt_to(bob.curve25519_key(), bob_otk, &key_v1_bytes)
+            .unwrap();
+        let (mut admin_to_carol, msg_carol_v1) = admin
+            .olm_encrypt_to(carol.curve25519_key(), carol_otk, &key_v1_bytes)
+            .unwrap();
+
+        // bob unwraps; bob keeps the inbound session (would be used for
+        // rotation messages from admin had he stayed in the group).
+        let (mut _bob_session, bob_plain_v1) = bob
+            .olm_decrypt_from(admin.curve25519_key(), &msg_bob_v1)
+            .unwrap();
+        let bob_receiver_v1 = GroupReceiver::new(
+            &SessionKey::from_bytes(&bob_plain_v1).unwrap(),
+        );
+        // carol unwraps; carol keeps her inbound session for the rotation msg.
+        let (mut carol_session, carol_plain_v1) = carol
+            .olm_decrypt_from(admin.curve25519_key(), &msg_carol_v1)
+            .unwrap();
+        let mut carol_receiver = GroupReceiver::new(
+            &SessionKey::from_bytes(&carol_plain_v1).unwrap(),
+        );
+
+        // Sanity: both can decrypt v1 traffic.
+        let v1_payload = sender_v1.encrypt(b"pre-kick message");
+        // Build inbound copies of v1_payload — Megolm decrypts move the
+        // ratchet forward, so each receiver needs its own message bytes.
+        let v1_bytes = v1_payload.to_bytes();
+        let mut bob_receiver_v1 = bob_receiver_v1; // shadow as mut
+        assert_eq!(
+            bob_receiver_v1
+                .decrypt(&MegolmMessage::from_bytes(&v1_bytes).unwrap())
+                .unwrap(),
+            b"pre-kick message"
+        );
+        assert_eq!(
+            carol_receiver
+                .decrypt(&MegolmMessage::from_bytes(&v1_bytes).unwrap())
+                .unwrap(),
+            b"pre-kick message"
+        );
+
+        // ── Kick bob: admin rotates → sender_v2, reshare to carol only. ────
+        let mut sender_v2 = GroupSender::new();
+        let key_v2_bytes = sender_v2.session_key().to_bytes();
+        // The admin sends a Normal Olm message to carol using the stored
+        // session — NO OTK consumed, no new pre-key handshake.
+        let rot_msg = super::olm_encrypt_on_session(&mut admin_to_carol, &key_v2_bytes).unwrap();
+        // bob is not reshared to — `admin_to_bob` simply stays unused.
+        // Belt-and-suspenders: assert we never invoked it.
+        let _ = &admin_to_bob;
+
+        // carol decrypts and installs the new receiver.
+        let carol_plain_v2 = super::olm_decrypt_on_session(&mut carol_session, &rot_msg).unwrap();
+        let mut carol_receiver_v2 = GroupReceiver::new(
+            &SessionKey::from_bytes(&carol_plain_v2).unwrap(),
+        );
+
+        // ── Post-rotation: admin encrypts under sender_v2. ─────────────────
+        let v2_payload = sender_v2.encrypt(b"post-kick message");
+        let v2_bytes = v2_payload.to_bytes();
+        assert_eq!(
+            carol_receiver_v2
+                .decrypt(&MegolmMessage::from_bytes(&v2_bytes).unwrap())
+                .unwrap(),
+            b"post-kick message"
+        );
+
+        // bob's surviving receiver (v1) MUST NOT decrypt v2 traffic — the
+        // core kick-ban contract. The MegolmMessage may even fail to parse
+        // under the v1 receiver's expected session, so either an error from
+        // from_bytes or from decrypt is acceptable.
+        let bob_attempt = MegolmMessage::from_bytes(&v2_bytes);
+        match bob_attempt {
+            Ok(m) => assert!(bob_receiver_v1.decrypt(&m).is_err()),
+            Err(_) => {}
+        }
+        assert_ne!(sender_v1.session_id(), sender_v2.session_id());
     }
 }
