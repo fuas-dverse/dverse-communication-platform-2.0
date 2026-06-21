@@ -215,7 +215,13 @@ fn handle_decision(state: &Mutex<AppState>, payload: &[u8]) -> Result<()> {
         .map_err(|e| anyhow!("parse AdmissionDecision: {e}"))?;
 
     match dec {
-        AdmissionDecision::Allow { olm_message_type, olm_ciphertext_b64, admin_identity_key, .. } => {
+        AdmissionDecision::Allow {
+            olm_message_type,
+            olm_ciphertext_b64,
+            admin_identity_key,
+            admin_ed25519_key,
+            ..
+        } => {
             let ct = B64.decode(&olm_ciphertext_b64)
                 .map_err(|e| anyhow!("base64 decode olm ct: {e}"))?;
             let msg = OlmMessage::from_parts(olm_message_type, &ct)
@@ -245,6 +251,13 @@ fn handle_decision(state: &Mutex<AppState>, payload: &[u8]) -> Result<()> {
             // rotation message (a Normal Olm message on the same session)
             // can be decrypted without a fresh pre-key handshake (#111).
             crypto.member_olm_session = Some(session);
+            // Pin the admin's Ed25519 fingerprint so the kick path (#145) can
+            // verify `KickNotice` signatures against a stored trust anchor
+            // rather than the notice itself. Sanity-check the wire string
+            // parses as an Ed25519 key before storing.
+            bot_framework::session_crypto::Ed25519PublicKey::from_base64(&admin_ed25519_key)
+                .map_err(|e| anyhow!("parse admin Ed25519: {e}"))?;
+            crypto.session_admin_ed25519_b64 = Some(admin_ed25519_key);
             st.join_flow = Some(JoinFlowStatus::Allowed);
             info!("admission Allow accepted, group receiver installed");
         }
@@ -269,7 +282,7 @@ pub async fn admit(
     state: &Mutex<AppState>,
     requester_cn: &str,
 ) -> Result<()> {
-    let (olm_type, olm_ct_b64, admin_id_b64, decision_key) = {
+    let (olm_type, olm_ct_b64, admin_id_b64, admin_ed25519_b64, decision_key) = {
         let mut st = state.lock().unwrap();
         let pending = st
             .pending_requests
@@ -284,6 +297,7 @@ pub async fn admit(
             .ok_or_else(|| anyhow!("admin has no group sender (not in Admin role)"))?;
         let session_key_bytes = group_sender.session_key().to_bytes();
         let admin_id_b64 = crypto.identity.curve25519_key_base64();
+        let admin_ed25519_b64 = crypto.identity.ed25519_key_base64();
 
         let peer_id = Curve25519PublicKey::from_base64(&req.identity_key)
             .map_err(|e| anyhow!("parse peer identity: {e}"))?;
@@ -311,13 +325,14 @@ pub async fn admit(
         );
 
         let decision_key = format!("dverse/session/admission/{}", req.requester_cn);
-        (msg_type, B64.encode(&ct), admin_id_b64, decision_key)
+        (msg_type, B64.encode(&ct), admin_id_b64, admin_ed25519_b64, decision_key)
     };
 
     let decision = AdmissionDecision::Allow {
         olm_message_type: olm_type,
         olm_ciphertext_b64: olm_ct_b64,
         admin_identity_key: admin_id_b64,
+        admin_ed25519_key: admin_ed25519_b64,
         admitted_at: unix_epoch_secs(),
     };
     let payload = serde_json::to_vec(&decision)
