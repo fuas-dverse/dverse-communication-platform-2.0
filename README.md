@@ -8,15 +8,22 @@ Part of the Interaction Design (IXD) Research Group at Fontys ICT, Eindhoven. Su
 
 ## Table of Contents
 
-1. [Overview](#overview)
-2. [Repository Layout](#repository-layout)
-3. [Tech Stack](#tech-stack)
-4. [Current State](#current-state)
-5. [Running the App](#running-the-app)
-6. [Architecture Decision Records](#architecture-decision-records)
-7. [CI/CD & Code Quality](#cicd--code-quality)
-8. [Collaboration with other DVerse Groups](#collaboration-with-other-dverse-groups)
-9. [Contributors](#contributors)
+- [DVerse Communication Platform 2.0](#dverse-communication-platform-20)
+  - [Table of Contents](#table-of-contents)
+  - [Overview](#overview)
+  - [Repository Layout](#repository-layout)
+  - [Tech Stack](#tech-stack)
+  - [Current State](#current-state)
+  - [Running the App](#running-the-app)
+    - [1. Start infrastructure](#1-start-infrastructure)
+    - [2. Start the backend](#2-start-the-backend)
+    - [3. Start the frontend](#3-start-the-frontend)
+    - [4. (Optional) Start telemetry](#4-optional-start-telemetry)
+    - [5. (Optional) Run bot agents for A2A](#5-optional-run-bot-agents-for-a2a)
+  - [Architecture Decision Records](#architecture-decision-records)
+  - [CI/CD \& Code Quality](#cicd--code-quality)
+  - [Collaboration with other DVerse Groups](#collaboration-with-other-dverse-groups)
+  - [Contributors](#contributors)
 
 ---
 
@@ -163,11 +170,11 @@ The platform is intended to eventually support the DVerse collaboration game pro
 
 ## Contributors
 
-| Name | Role                                                                                         |
-|---|----------------------------------------------------------------------------------------------|
-| Abel-Raul Mazilu | A2A Communication, Observability, CI/CD, UI/UX, Zenoh, backend development (Rust and Python) |
-| Yordan Mitev | Tauri client, Rust, Zenoh, mTLS security                                                     |
-| Denis Neagoe | Tauri client, Proof-of-concept, AI-Human and AI-AI communication                             |
+| Name | Role                                                                                                                   |
+|---|---------------------------------------------------------------------------------------------------------------------------|
+| Abel-Raul Mazilu | A2A Communication, Observability, CI/CD, UI/UX, Zenoh, backend development (Rust and Python)               |
+| Yordan Mitev     | Tauri client, Rust, Zenoh, mTLS security                                                                   |
+| Denis Neagoe     | Tauri client, Proof-of-concept, AI-Human and AI-AI communication, Zenoh Session bridge. Dockerization      |
 
 **Supervisor:** Marc van Grootel — Fontys ICT, Interaction Design Research Group
 
