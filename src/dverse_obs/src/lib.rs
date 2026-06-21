@@ -14,22 +14,41 @@
 //! 1. Always installs a `tracing-subscriber` stack with:
 //!    * an `EnvFilter` honouring `RUST_LOG`, falling back to
 //!      [`DEFAULT_FILTER`] (our crates at `info`, the noisy transitives
-//!      at `warn` — see the constant doc for the full list);
+//!      at `warn`; see the constant doc for the full list);
 //!    * a compact `fmt` layer writing to stderr so engineers running
 //!      `cargo run` still see logs locally.
 //!
-//! 2. If `OTEL_EXPORTER_OTLP_ENDPOINT` is set in the environment, *also*
-//!    attaches:
+//! 2. Attaches an OTLP logs + traces exporter pointed at the resolved
+//!    endpoint (see "OTLP endpoint resolution" below):
 //!    * an [`opentelemetry_appender_tracing`] layer that forwards every
 //!      `tracing` event to an OTLP logs exporter;
 //!    * a [`tracing_opentelemetry`] layer that exports spans over OTLP.
 //!
 //!    The resource attribute `service.name` defaults to the value passed
-//!    into [`init`], overridable via `OTEL_SERVICE_NAME` — matching the
-//!    convention used by `experiments/chat-app/backend/telemetry.py`.
+//!    into [`init`], overridable via `OTEL_SERVICE_NAME` (matching the
+//!    convention used by `experiments/chat-app/backend/telemetry.py`).
 //!
-//! Stdout is always live; OTLP is purely additive.  No collector running?
-//! Don't set the env var and the binary behaves exactly as before.
+//! Stdout is always live; OTLP is layered on top.  If the resolved
+//! collector endpoint is unreachable the exporter silently retries in
+//! the background and the host process is unaffected.
+//!
+//! # OTLP endpoint resolution
+//!
+//! With no env var set, the endpoint comes from the profile-baked
+//! [`DEFAULT_OTLP_ENDPOINT`]:
+//!
+//! * Debug builds (`cargo run`, `cargo build`, every workspace test)
+//!   point at `http://localhost:4317`, which is where the chat-app
+//!   OTel collector listens when its docker-compose stack is up.
+//! * Release builds (`cargo build --release`) point at
+//!   `https://logs.dverse.yordanmitev.me:4317`, the central dverse
+//!   sink, so any binary shipped from this workspace lands in the
+//!   production stream by default.
+//!
+//! Override with `OTEL_EXPORTER_OTLP_ENDPOINT=<url>`.  Opt out entirely
+//! by setting it to the empty string, useful in CI runs or on
+//! air-gapped boxes where the periodic connection-refused warnings
+//! would be noise.
 //!
 //! # Idempotency
 //!
@@ -42,14 +61,16 @@
 //!
 //! The OTLP exporter uses Tokio under the hood
 //! ([`opentelemetry_sdk::runtime::Tokio`]).  Call [`init`] from inside
-//! `#[tokio::main]` (or any tokio context) when you expect OTLP export
-//! to be active.  When `OTEL_EXPORTER_OTLP_ENDPOINT` is unset the OTLP
-//! branch is skipped entirely and no runtime is needed.
+//! `#[tokio::main]` (or any tokio context) whenever the OTLP branch is
+//! active, which is the default.  Pass
+//! `OTEL_EXPORTER_OTLP_ENDPOINT=""` if you need to call [`init`] from a
+//! non-tokio context.
 
 use std::sync::OnceLock;
 
 use opentelemetry::{trace::TracerProvider as _, KeyValue};
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
     logs::LoggerProvider, runtime, trace::TracerProvider as SdkTracerProvider, Resource,
 };
@@ -77,11 +98,24 @@ pub const DEFAULT_FILTER: &str = concat!(
     "zbus=warn,",
 );
 
-/// Env var that gates OTLP export.  Reading is delegated to the
-/// `opentelemetry-otlp` SDK once the exporter is built, but we still
-/// check it explicitly so we can skip the entire OTLP branch (and
-/// avoid touching the network) when it's unset.
+/// Env var overriding the OTLP endpoint.  Setting it to a URL points
+/// the exporter at that endpoint; setting it to the empty string is an
+/// explicit opt-out (skip the OTLP branch entirely, useful in CI and
+/// air-gapped tests).  Leaving it unset falls through to
+/// [`DEFAULT_OTLP_ENDPOINT`].
 const OTLP_ENDPOINT_ENV: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
+
+/// Built-in fallback for the OTLP endpoint when
+/// [`OTLP_ENDPOINT_ENV`] is unset.  Debug builds (`cargo run`,
+/// `cargo build`, every workspace test) point at the chat-app collector
+/// on localhost; release builds (`cargo build --release`) point at the
+/// central dverse sink so any binary shipped from this workspace ends
+/// up in the production stream by default.  Either default is
+/// override-able via the env var.
+#[cfg(debug_assertions)]
+pub const DEFAULT_OTLP_ENDPOINT: &str = "http://localhost:4317";
+#[cfg(not(debug_assertions))]
+pub const DEFAULT_OTLP_ENDPOINT: &str = "https://logs.dverse.yordanmitev.me:4317";
 
 /// Env var override for the `service.name` resource attribute.  Falls
 /// back to the value passed into [`init`] when unset.
@@ -124,27 +158,24 @@ where
         };
         let make_fmt = || fmt::layer().with_target(true).with_level(true).compact();
 
-        // OTLP export is off unless someone has pointed us at a collector.
-        // The env check is explicit (rather than relying on the SDK's
-        // implicit default of "localhost:4317") so `cargo test` and
-        // air-gapped boxes don't spam connection-refused errors.
-        //
-        // Provider construction is split from subscriber install so the
-        // fallback to stdout-only doesn't have to clone or re-build the
-        // extra layer — it's moved into exactly one branch below.
-        let providers = if std::env::var_os(OTLP_ENDPOINT_ENV).is_some() {
-            match build_otlp_providers(service_name) {
+        // OTLP export is on by default; the endpoint is resolved from
+        // the env var (with empty-string opt-out) or the profile-baked
+        // [`DEFAULT_OTLP_ENDPOINT`].  Provider construction is split
+        // from subscriber install so the fallback to stdout-only
+        // doesn't have to clone or re-build the extra layer; the layer
+        // is moved into exactly one branch below.
+        let providers = match resolve_otlp_endpoint() {
+            Some(endpoint) => match build_otlp_providers(service_name, &endpoint) {
                 Ok(p) => Some(p),
                 Err(e) => {
                     eprintln!(
-                        "[dverse-obs] OTLP exporter init failed; \
+                        "[dverse-obs] OTLP exporter init failed for {endpoint}; \
                          continuing with stdout-only logging: {e}"
                     );
                     None
                 }
-            }
-        } else {
-            None
+            },
+            None => None,
         };
 
         match providers {
@@ -171,12 +202,25 @@ where
     });
 }
 
-/// Build the OTLP logs + traces providers.  Kept separate from
-/// subscriber install so [`init_with_extra_layer`] can decide between
-/// the OTLP-on and OTLP-off subscriber stacks without having to
-/// duplicate the extra-layer plumbing.
+/// Resolve the OTLP endpoint from the environment, applying the
+/// profile-baked default when the env var is unset.  Returns `None`
+/// when the user explicitly opts out by setting
+/// [`OTLP_ENDPOINT_ENV`] to the empty string.
+fn resolve_otlp_endpoint() -> Option<String> {
+    match std::env::var(OTLP_ENDPOINT_ENV) {
+        Ok(s) if s.is_empty() => None,
+        Ok(s) => Some(s),
+        Err(_) => Some(DEFAULT_OTLP_ENDPOINT.to_string()),
+    }
+}
+
+/// Build the OTLP logs + traces providers against `endpoint`.  Kept
+/// separate from subscriber install so [`init_with_extra_layer`] can
+/// decide between the OTLP-on and OTLP-off subscriber stacks without
+/// duplicating the extra-layer plumbing.
 fn build_otlp_providers(
     service_name: &str,
+    endpoint: &str,
 ) -> Result<(LoggerProvider, SdkTracerProvider), Box<dyn std::error::Error + Send + Sync>> {
     let resolved_name =
         std::env::var(SERVICE_NAME_ENV).unwrap_or_else(|_| service_name.to_string());
@@ -184,6 +228,7 @@ fn build_otlp_providers(
 
     let log_exporter = opentelemetry_otlp::LogExporter::builder()
         .with_tonic()
+        .with_endpoint(endpoint)
         .build()
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
             format!("log exporter: {e}").into()
@@ -195,6 +240,7 @@ fn build_otlp_providers(
 
     let span_exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
+        .with_endpoint(endpoint)
         .build()
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
             format!("span exporter: {e}").into()

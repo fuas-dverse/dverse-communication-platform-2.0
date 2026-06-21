@@ -124,12 +124,35 @@ npm run dev
 
 ```bash
 cd experiments/chat-app
-docker compose up jaeger otelcol prometheus grafana -d
+docker compose up jaeger otelcol prometheus grafana loki -d
 # Grafana: http://localhost:3000
 # Jaeger:  http://localhost:16686
 ```
 
-Set `OTEL_ENABLED=true` in `experiments/chat-app/.env`.
+Set `OTEL_ENABLED=true` in `experiments/chat-app/.env` to export from
+the Python backend.
+
+#### Rust services (`dverse-obs`)
+
+Every Rust binary in `src/` uses the shared
+[`dverse-obs`](src/dverse_obs/) crate for structured logging. It
+installs a stdout `tracing-subscriber` plus an OTLP logs and traces
+exporter pointed at:
+
+- `http://localhost:4317` in debug builds (the chat-app collector
+  above), and
+- `https://logs.dverse.yordanmitev.me:4317` in release builds.
+
+So just `cargo run -p dverse-ping` (with the chat-app stack up) puts
+logs into Grafana under `service_name=dverse-ping`. Override the
+endpoint with `OTEL_EXPORTER_OTLP_ENDPOINT=<url>` or opt out entirely
+with `OTEL_EXPORTER_OTLP_ENDPOINT=""`.
+
+Query all Rust services at once in Grafana, Explore, Loki:
+
+```logql
+{service_name=~"dverse-.*"}
+```
 
 ### 5. (Optional) Run bot agents for A2A
 
