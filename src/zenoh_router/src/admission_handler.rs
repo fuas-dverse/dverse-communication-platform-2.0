@@ -232,7 +232,7 @@ fn handle_decision(state: &Mutex<AppState>, payload: &[u8]) -> Result<()> {
             }
             let crypto = st.crypto.as_mut()
                 .ok_or_else(|| anyhow!("no crypto state to receive admission"))?;
-            let (_session, plaintext) = crypto.identity.olm_decrypt_from(admin_id, &msg)
+            let (session, plaintext) = crypto.identity.olm_decrypt_from(admin_id, &msg)
                 .map_err(|e| anyhow!("olm decrypt: {e}"))?;
             let session_key = SessionKey::from_bytes(&plaintext)
                 .map_err(|e| anyhow!("SessionKey::from_bytes: {e}"))?;
@@ -241,6 +241,10 @@ fn handle_decision(state: &Mutex<AppState>, payload: &[u8]) -> Result<()> {
             // expose that, but the admin only runs one group at a time for now
             // so we use the admin's CN as a stable key.
             crypto.group_receivers.insert("admin".to_string(), receiver);
+            // Persist the established 1:1 Olm session so a later kick/ban
+            // rotation message (a Normal Olm message on the same session)
+            // can be decrypted without a fresh pre-key handshake (#111).
+            crypto.member_olm_session = Some(session);
             st.join_flow = Some(JoinFlowStatus::Allowed);
             info!("admission Allow accepted, group receiver installed");
         }
@@ -285,10 +289,26 @@ pub async fn admit(
             .map_err(|e| anyhow!("parse peer identity: {e}"))?;
         let peer_otk = Curve25519PublicKey::from_base64(&req.one_time_key)
             .map_err(|e| anyhow!("parse peer OTK: {e}"))?;
-        let (_session, msg) = crypto.identity
+        let (olm_session, msg) = crypto.identity
             .olm_encrypt_to(peer_id, peer_otk, &session_key_bytes)
             .map_err(|e| anyhow!("olm wrap session key: {e}"))?;
         let (msg_type, ct) = msg.to_parts();
+
+        // Persist the established 1:1 Olm session keyed by the requester's CN.
+        // The kick/ban path (#111) uses it for a Normal-message rotation send
+        // without consuming another OTK.
+        crypto
+            .admin_olm_sessions
+            .insert(req.requester_cn.clone(), olm_session);
+        // Remember the requester's identity so the kick/ban path can address
+        // the rotation message even after `pending_requests` is drained.
+        crypto.admitted_identities.insert(
+            req.requester_cn.clone(),
+            crate::state::AdmittedIdentity {
+                cn: req.requester_cn.clone(),
+                identity_key_b64: req.identity_key.clone(),
+            },
+        );
 
         let decision_key = format!("dverse/session/admission/{}", req.requester_cn);
         (msg_type, B64.encode(&ct), admin_id_b64, decision_key)

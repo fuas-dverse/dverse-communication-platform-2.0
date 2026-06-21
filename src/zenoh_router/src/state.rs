@@ -6,7 +6,7 @@ use bot_framework::admission::JoinRequest;
 use bot_framework::announce::{AgentAnnounce, AgentStatusWire};
 use bot_framework::config::{DverseConfig, SessionRole};
 use bot_framework::session_crypto::{
-    Curve25519PublicKey, GroupReceiver, GroupSender, SessionIdentity,
+    Curve25519PublicKey, GroupReceiver, GroupSender, OlmSession, SessionIdentity,
 };
 use tokio::sync::Notify;
 
@@ -86,6 +86,33 @@ pub struct SessionCryptoState {
     /// Inbound Megolm sessions keyed by `MegolmSession.session_id()` —
     /// admitted clients hold the admin's sender; the admin holds its own.
     pub group_receivers: HashMap<String, GroupReceiver>,
+    /// Admin-side: 1:1 Olm sessions established as a side-effect of admitting
+    /// a member. Keyed by the member's CN. Survives across kick/ban rotations
+    /// so the admin can re-deliver a fresh Megolm `SessionKey` over a Normal
+    /// (post-pre-key) Olm message without consuming a new one-time key. Dropped
+    /// when the member is kicked (so a re-admission opens a fresh handshake).
+    pub admin_olm_sessions: HashMap<String, OlmSession>,
+    /// Admin-side: identity information remembered for each admitted member.
+    /// Populated at admit time; needed to address rotation messages and to
+    /// surface the admitted list to the GUI for the per-member Kick / Ban
+    /// buttons.
+    pub admitted_identities: HashMap<String, AdmittedIdentity>,
+    /// Member-side: the established 1:1 Olm session to the admin. Held so the
+    /// member can decrypt a rotation message that lands later in the session.
+    /// `None` on the admin side and until the member's Olm-Allow lands.
+    pub member_olm_session: Option<OlmSession>,
+}
+
+/// Per-admitted-CN identity record kept by the admin. Captured at admit time
+/// from the verified `JoinRequest`; lets the kick handler address a rotation
+/// message to each remaining member without reading the original (already
+/// consumed) join queue.
+#[derive(Debug, Clone)]
+pub struct AdmittedIdentity {
+    pub cn: String,
+    /// Base64 Curve25519 identity key — informational, also used to log a
+    /// fingerprint-style identifier in the GUI / tracing output.
+    pub identity_key_b64: String,
 }
 
 impl SessionCryptoState {
@@ -102,6 +129,9 @@ impl SessionCryptoState {
             published_otk,
             group_sender,
             group_receivers: HashMap::new(),
+            admin_olm_sessions: HashMap::new(),
+            admitted_identities: HashMap::new(),
+            member_olm_session: None,
         }
     }
 }
