@@ -116,6 +116,14 @@ pub struct SessionCryptoState {
     /// member can decrypt a rotation message that lands later in the session.
     /// `None` on the admin side and until the member's Olm-Allow lands.
     pub member_olm_session: Option<OlmSession>,
+    /// Member-side: the admin's Ed25519 signing key, base64, pinned at
+    /// admission time from `AdmissionDecision::Allow.admin_ed25519_key`.
+    /// `KickNotice` signature verification (#145) anchors against THIS
+    /// stored value, not the key the notice carries (the notice's
+    /// `admin_ed25519_key_b64` is informational; a stored-vs-notice
+    /// mismatch is itself a drop signal). `None` on the admin side and
+    /// until the member's Allow lands.
+    pub session_admin_ed25519_b64: Option<String>,
 }
 
 /// Per-admitted-CN identity record kept by the admin. Captured at admit time
@@ -147,6 +155,7 @@ impl SessionCryptoState {
             admin_olm_sessions: HashMap::new(),
             admitted_identities: HashMap::new(),
             member_olm_session: None,
+            session_admin_ed25519_b64: None,
         }
     }
 }

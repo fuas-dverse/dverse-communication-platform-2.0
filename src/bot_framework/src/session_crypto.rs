@@ -39,7 +39,7 @@ use vodozemac::olm::{Account, Session, SessionConfig};
 // without re-consuming a one-time key.
 pub use vodozemac::megolm::{MegolmMessage, SessionKey};
 pub use vodozemac::olm::{OlmMessage, Session as OlmSession};
-pub use vodozemac::Curve25519PublicKey;
+pub use vodozemac::{Curve25519PublicKey, Ed25519PublicKey, Ed25519Signature};
 use x509_parser::prelude::*;
 
 // ── Node identity (vodozemac Account) ─────────────────────────────────────────
@@ -70,6 +70,22 @@ impl SessionIdentity {
     /// Base64 Ed25519 fingerprint key.
     pub fn ed25519_key_base64(&self) -> String {
         self.account.ed25519_key().to_base64()
+    }
+
+    /// The Ed25519 signing/fingerprint public key. Admins use the matching
+    /// private key (held inside `account`) to sign control-plane messages
+    /// like `KickNotice` (#145); receivers verify against this public key,
+    /// which they learn at admission time.
+    pub fn ed25519_key(&self) -> Ed25519PublicKey {
+        self.account.ed25519_key()
+    }
+
+    /// Sign `message` with this account's Ed25519 signing key. Used by the
+    /// admin side of the kick path to produce the signature over
+    /// `control::kick_signing_bytes(...)`; receivers re-derive the same
+    /// bytes and call `Ed25519PublicKey::verify`.
+    pub fn sign(&self, message: &[u8]) -> Ed25519Signature {
+        self.account.sign(message)
     }
 
     /// Generate `count` one-time keys (consumed by peers establishing an Olm
