@@ -5,18 +5,18 @@
 //! `zenoh_router::router::build_acl_json`) carries them without an ACL change.
 //!
 //! * `dverse/session/control/kick/<kicked_cn>` — `KickNotice`,
-//!   admin → kicked member. JSON, plaintext.
+//!   admin → kicked member. JSON, plaintext, Ed25519-signed.
 //!
-//!   Authentication note (unmitigated): the session-rule allows ANY cert
-//!   holder to publish on `dverse/session/**`, so an admitted member could
-//!   forge a `KickNotice` targeted at a peer and the receiver would currently
-//!   tear down on the first match — `kick_handler::handle_kick` does NOT
-//!   cross-check against a rotation having actually happened, nor does it
-//!   verify a sender signature. The issue's acceptance criteria don't require
-//!   unforgeable kicks, but this is a known soft-spot to address in a follow
-//!   up (signing the notice with the admin's Ed25519 fingerprint is the
-//!   intended hardening; the wire type already carries `kicked_cn` and
-//!   `reason` so a future signature field can be added additively).
+//!   Authentication (#145): the notice carries an Ed25519 signature over a
+//!   domain-separated, length-prefixed byte form of `(kicked_cn, kicked_at,
+//!   banned)` (see [`kick_signing_bytes`]), signed with the admin's vodozemac
+//!   `Account` Ed25519 key. Receivers verify against the admin's Ed25519
+//!   identity learned during admission (`AdmissionDecision::Allow.admin_ed25519_key`,
+//!   pinned into `SessionCryptoState.session_admin_ed25519_b64`). Forged
+//!   notices (wrong signer, mutated identifying fields, missing signature)
+//!   are silently dropped. The session-rule still allows any admitted cert
+//!   holder to publish on this topic, but only the admin can produce a
+//!   notice that verifies.
 //!
 //! * `dverse/session/control/rotation/<member_cn>` — `SessionKeyRotation`,
 //!   admin → one remaining member. Carries an Olm `Normal` message whose
@@ -49,6 +49,46 @@ pub struct KickNotice {
     /// member able to decrypt traffic anyway, so its kick screen would be
     /// trivially detectable as a forgery.
     pub kicked_at: String,
+    /// Ed25519 signature, base64, over [`kick_signing_bytes`] of
+    /// `(kicked_cn, kicked_at, banned)`. Produced with the admin's vodozemac
+    /// `Account::sign`. Receivers verify against the admin's Ed25519 key
+    /// they learned at admission time (the stored trust anchor); the notice
+    /// is silently dropped on signature mismatch or absence (#145).
+    pub admin_ed25519_sig_b64: String,
+    /// The admin's Ed25519 public key, base64. Informational and useful in
+    /// tracing; verification is performed against the STORED admin Ed25519
+    /// from admission, not this field. A mismatch between the stored anchor
+    /// and the notice-carried key is itself a signal to drop.
+    pub admin_ed25519_key_b64: String,
+}
+
+/// Canonical, domain-separated byte form signed by the admin and re-built by
+/// the receiver. Both admin and receiver call this exact function so the byte
+/// layout is impossible to drift between sides.
+///
+/// Layout (little is structural, all delimiters explicit):
+/// ```text
+///   b"dverse.kick.v1\0"
+///   ‖ u32_be(len(kicked_cn)) ‖ kicked_cn
+///   ‖ u32_be(len(kicked_at)) ‖ kicked_at
+///   ‖ u8(banned as 0|1)
+/// ```
+///
+/// `reason` is intentionally NOT signed: it is display copy only, and the
+/// design choice lets admins fix a typo in the kick reason without
+/// re-signing. The unit test
+/// `kick_with_mutated_reason_still_verifies` pins that choice.
+pub fn kick_signing_bytes(kicked_cn: &str, kicked_at: &str, banned: bool) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(
+        15 + 4 + kicked_cn.len() + 4 + kicked_at.len() + 1,
+    );
+    buf.extend_from_slice(b"dverse.kick.v1\0");
+    buf.extend_from_slice(&(kicked_cn.len() as u32).to_be_bytes());
+    buf.extend_from_slice(kicked_cn.as_bytes());
+    buf.extend_from_slice(&(kicked_at.len() as u32).to_be_bytes());
+    buf.extend_from_slice(kicked_at.as_bytes());
+    buf.push(if banned { 1 } else { 0 });
+    buf
 }
 
 /// Admin → one remaining member. Carries a freshly-minted Megolm `SessionKey`
@@ -107,12 +147,51 @@ mod tests {
             reason: Some("spammed the channel".into()),
             banned: true,
             kicked_at: "1750000000".into(),
+            admin_ed25519_sig_b64: "sig".into(),
+            admin_ed25519_key_b64: "key".into(),
         };
         let json = serde_json::to_string(&n).unwrap();
         let parsed: KickNotice = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.kicked_cn, "bob");
         assert_eq!(parsed.reason.as_deref(), Some("spammed the channel"));
         assert!(parsed.banned);
+        assert_eq!(parsed.admin_ed25519_sig_b64, "sig");
+        assert_eq!(parsed.admin_ed25519_key_b64, "key");
+    }
+
+    /// Canonical signing bytes: stable across runs (no system inputs, no map
+    /// ordering), and the layout is exactly what the doc comment claims.
+    /// Pinned with an expected byte form so a future "tidy this up" refactor
+    /// can't silently break wire compatibility with already-deployed admins.
+    #[test]
+    fn kick_signing_bytes_layout_is_pinned() {
+        let bytes = kick_signing_bytes("bob", "1750000000", true);
+        let mut expected: Vec<u8> = Vec::new();
+        expected.extend_from_slice(b"dverse.kick.v1\0");
+        expected.extend_from_slice(&3u32.to_be_bytes());
+        expected.extend_from_slice(b"bob");
+        expected.extend_from_slice(&10u32.to_be_bytes());
+        expected.extend_from_slice(b"1750000000");
+        expected.push(1u8);
+        assert_eq!(bytes, expected);
+
+        // banned flag flips ONE byte at the tail.
+        let unbanned = kick_signing_bytes("bob", "1750000000", false);
+        assert_eq!(unbanned.last(), Some(&0u8));
+        assert_eq!(bytes.last(), Some(&1u8));
+        assert_eq!(&bytes[..bytes.len() - 1], &unbanned[..unbanned.len() - 1]);
+    }
+
+    /// Length-prefix isolation: two distinct field decompositions that would
+    /// concatenate to the same naive `cn || kicked_at` string must NOT collide
+    /// in the signing bytes. Catches the classic "ambiguous concatenation"
+    /// attack where an attacker pushes a `/` or digit boundary across fields.
+    #[test]
+    fn kick_signing_bytes_disambiguates_field_boundaries() {
+        // Naive: "bob1750" + "000000" == "bob17" + "50000000".
+        let a = kick_signing_bytes("bob1750", "000000", false);
+        let b = kick_signing_bytes("bob17", "50000000", false);
+        assert_ne!(a, b);
     }
 
     /// SessionKeyRotation wire format: all four required fields survive a
