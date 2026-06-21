@@ -1,0 +1,26 @@
+# Requires nginx ingress controller: kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
+# For local clusters (minikube): minikube addons enable ingress
+#
+# Access the app at: http://dverse.local (add to /etc/hosts → <ingress-ip> dverse.local)
+# Observability tools: use kubectl port-forward instead of exposing via ingress.
+#   kubectl port-forward -n dverse svc/grafana 3000:3000
+#   kubectl port-forward -n dverse svc/jaeger 16686:16686
+#   kubectl port-forward -n dverse svc/prometheus 9090:9090
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dverse-ingress
+  namespace: dverse
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: dverse.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80

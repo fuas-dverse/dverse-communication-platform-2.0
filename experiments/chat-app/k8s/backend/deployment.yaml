@@ -1,0 +1,78 @@
+# Build: docker build -t REGISTRY/dverse-backend:latest experiments/chat-app/backend/
+# Replace REGISTRY with your container registry (e.g. ghcr.io/your-org).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: dverse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: REGISTRY/dverse-backend:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DB_PATH
+              value: /data/chatapp.db
+            - name: ZENOH_ROUTER
+              value: tcp/zenoh-router:7447
+            - name: OTEL_ENABLED
+              value: "true"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otelcol:4318
+            - name: OTEL_SERVICE_NAME
+              value: dverse-backend
+            - name: LOGFIRE_SERVICE_NAME
+              value: dverse-backend
+            - name: LOGFIRE_ENVIRONMENT
+              value: production
+            - name: LOCAL_LLM_URL
+              value: http://ollama:11434
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: SECRET_KEY
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: ANTHROPIC_API_KEY
+            - name: LOGFIRE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: LOGFIRE_TOKEN
+          volumeMounts:
+            - name: backend-data
+              mountPath: /data
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1"
+      volumes:
+        - name: backend-data
+          persistentVolumeClaim:
+            claimName: backend-data
