@@ -1,35 +1,54 @@
 services:
-  zenoh-router:
-    image: eclipse/zenoh:latest
-    container_name: chatapp-zenoh
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: chatapp-backend
     ports:
-      - "7447:7447/tcp"
-      - "7447:7447/udp"
-      - "8000:8000/tcp" # REST API (optional)
-    command: --rest-http-port 8000
-    restart: unless-stopped
-    networks:
-      - chatapp
-
-  ollama:
-    image: ollama/ollama
-    container_name: chatapp-ollama
-    ports:
-      - "11434:11434"
+      - "8080:8080"
+    environment:
+      - OTEL_ENABLED=false
+      - DB_PATH=/data/chatapp.db
+      - BRIDGE_HOST=host.docker.internal
     volumes:
-      - ollama_data:/root/.ollama
+      - backend_data:/data
+      - ./backend:/app/backend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     networks:
       - chatapp
 
-    # ── GPU support (uncomment if you have an NVIDIA GPU) ──────────────────────
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+  frontend:
+    image: node:22-alpine
+    container_name: chatapp-frontend
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host"
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE=http://localhost:8080
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - chatapp
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: chatapp-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - chatapp
 
   jaeger:
     image: jaegertracing/jaeger:latest
@@ -87,9 +106,9 @@ services:
       - chatapp
 
 volumes:
-  ollama_data:
   prometheus_data:
   grafana_data:
+  backend_data:
 
 networks:
   chatapp:

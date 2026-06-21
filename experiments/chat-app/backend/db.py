@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import unittest
 from unittest.mock import patch
@@ -7,7 +8,7 @@ import backend.db as db_module
 import threading
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent.parent / "chatapp.db"
+DB_PATH = Path(os.environ.get("DB_PATH", str(Path(__file__).parent.parent / "chatapp.db")))
 
 _local = threading.local()
 

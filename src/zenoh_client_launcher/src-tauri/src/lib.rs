@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::process::Child;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -272,10 +271,15 @@ impl InnerState {
 
 pub struct AppStateWrapper(pub Arc<Mutex<InnerState>>);
 
-// ── Bot processes ─────────────────────────────────────────────────────────────
+// ── Bot tasks ─────────────────────────────────────────────────────────────────
+
+/// A running bot is a tokio task with a cancellation sender.
+struct BotTask {
+    cancel: tokio::sync::oneshot::Sender<()>,
+}
 
 #[derive(Default)]
-pub struct BotProcesses(Mutex<HashMap<String, Child>>);
+pub struct BotProcesses(Mutex<HashMap<String, BotTask>>);
 
 // ── Wire DTOs ─────────────────────────────────────────────────────────────────
 
@@ -477,12 +481,29 @@ fn logout(state: State<'_, AppStateWrapper>) {
         st.screen = AppScreen::Login;
         Arc::clone(&st.router)
     };
-    info!("logout: resetting session view (embedded router stays running)");
     let mut r = router.lock().unwrap();
-    r.router_status = zr::RouterStatus::Idle;
-    r.session_id = String::new();
-    r.connected_nodes.clear();
-    r.log.clear();
+    let is_admin = matches!(r.session_role, SessionRole::Admin);
+    let session_empty = r.connected_nodes.is_empty();
+
+    if is_admin && session_empty {
+        // Admin leaving an empty session: tear the session down entirely.
+        info!("logout: admin left empty session — deleting session state");
+        r.router_status = zr::RouterStatus::Idle;
+        r.session_id = String::new();
+        r.session_role = SessionRole::Admin;
+        r.connected_nodes.clear();
+        r.admitted.clear();
+        r.crypto = None;
+        r.pending_requests.clear();
+        r.banned_cns.clear();
+        r.log.clear();
+    } else {
+        info!("logout: resetting session view (embedded router stays running)");
+        r.router_status = zr::RouterStatus::Idle;
+        r.session_id = String::new();
+        r.connected_nodes.clear();
+        r.log.clear();
+    }
 }
 
 // ── Commands: register ────────────────────────────────────────────────────────
@@ -589,7 +610,9 @@ async fn register_user_async(username: &str, password: &str) -> Result<(), Strin
 // ── Commands: router discovery ────────────────────────────────────────────────
 
 #[tauri::command]
-async fn discover_routers() -> Result<Vec<DiscoveredRouter>, String> {
+async fn discover_routers(
+    app_state: State<'_, AppStateWrapper>,
+) -> Result<Vec<DiscoveredRouter>, String> {
     let daemon =
         ServiceDaemon::new().map_err(|e| format!("mDNS daemon failed: {e}"))?;
     let receiver = daemon
@@ -652,7 +675,16 @@ async fn discover_routers() -> Result<Vec<DiscoveredRouter>, String> {
     }
 
     let _ = daemon.shutdown();
-    let found: Vec<DiscoveredRouter> = routers.into_values().collect();
+    // Filter out the session we're currently hosting/in.
+    let own_cn = {
+        let inner = app_state.0.lock().unwrap();
+        let r = inner.router.lock().unwrap();
+        r.session_id.clone()
+    };
+    let found: Vec<DiscoveredRouter> = routers
+        .into_values()
+        .filter(|r| r.name != own_cn)
+        .collect();
     info!(count = found.len(), "router discovery finished");
     Ok(found)
 }
@@ -663,39 +695,55 @@ async fn discover_routers() -> Result<Vec<DiscoveredRouter>, String> {
 async fn start_bot(
     config: BotConfig,
     processes: State<'_, BotProcesses>,
+    app_state: State<'_, AppStateWrapper>,
 ) -> Result<BotStatus, String> {
-    let mut map = processes.0.lock().map_err(|e| e.to_string())?;
-    if map.contains_key(&config.id) {
-        return Ok(BotStatus { id: config.id, running: true });
-    }
-    let (program, args) = resolve_bot_agent(&config)?;
-    let mut cmd = std::process::Command::new(&program);
-    cmd.args(&args)
-        .arg("--name")
-        .arg(&config.name)
-        .arg("--router")
-        .arg(&config.zenoh_router)
-        .arg("--description")
-        .arg(&config.description);
-    if config.llm_backend == "ollama" {
-        cmd.arg("--ollama-url")
-            .arg(&config.ollama_url)
-            .arg("--model")
-            .arg(&config.ollama_model);
-    }
-    if !config.claude_api_key.is_empty() {
-        cmd.env("ANTHROPIC_API_KEY", &config.claude_api_key);
-    }
-    if !config.system_prompt.is_empty() {
-        cmd.env("BOT_SYSTEM_PROMPT", &config.system_prompt);
-    }
-    let child = cmd.spawn().map_err(|e| {
-        error!(id = %config.id, name = %config.name, error = %e, "start_bot: spawn failed");
-        format!("Failed to start bot: {e}")
-    })?;
     let id = config.id.clone();
-    info!(id = %id, name = %config.name, backend = %config.llm_backend, "start_bot: bot started");
-    map.insert(id.clone(), child);
+    {
+        let map = processes.0.lock().map_err(|e| e.to_string())?;
+        if map.contains_key(&id) {
+            return Ok(BotStatus { id, running: true });
+        }
+    }
+
+    // Read current DverseConfig from the router state so the bot joins the
+    // active session without requiring a separate config file.
+    let dverse_cfg = {
+        let inner = app_state.0.lock().unwrap();
+        let _r = inner.router.lock().unwrap();
+        bot_framework::config::DverseConfig::load().ok()
+    };
+    let dverse_cfg = dverse_cfg.ok_or_else(|| "No active session — log in first".to_string())?;
+
+    // Auto-admit the bot's CN so it passes the session ACL when admitted is non-empty.
+    // The bot shares the operator's cert CN — admit it explicitly so a reload doesn't block it.
+    {
+        let inner = app_state.0.lock().unwrap();
+        let mut r = inner.router.lock().unwrap();
+        let bot_cn = dverse_cfg.operator_cn();
+        if !r.admitted.contains(&bot_cn) {
+            r.admitted.push(bot_cn);
+            r.admitted_changed.notify_one();
+        }
+    }
+
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
+    let bot_name      = config.name.clone();
+    let ollama_url    = config.ollama_url.clone();
+    let ollama_model  = config.ollama_model.clone();
+    let system_prompt = config.system_prompt.clone();
+    let task_id       = id.clone();
+
+    tokio::spawn(async move {
+        if let Err(e) = run_ollama_bot(dverse_cfg, bot_name, ollama_url, ollama_model, system_prompt, cancel_rx).await {
+            error!(id = %task_id, error = %e, "bot task exited with error");
+        }
+    });
+
+    processes.0.lock().map_err(|e| e.to_string())?
+        .insert(id.clone(), BotTask { cancel: cancel_tx });
+
+    info!(id = %id, name = %config.name, "start_bot: bot task started");
     Ok(BotStatus { id, running: true })
 }
 
@@ -705,9 +753,9 @@ async fn stop_bot(
     processes: State<'_, BotProcesses>,
 ) -> Result<BotStatus, String> {
     let mut map = processes.0.lock().map_err(|e| e.to_string())?;
-    if let Some(mut child) = map.remove(&id) {
-        child.kill().map_err(|e| format!("Failed to kill bot: {e}"))?;
-        info!(id = %id, "stop_bot: bot stopped");
+    if let Some(task) = map.remove(&id) {
+        let _ = task.cancel.send(());
+        info!(id = %id, "stop_bot: bot task cancelled");
     }
     Ok(BotStatus { id, running: false })
 }
@@ -716,45 +764,126 @@ async fn stop_bot(
 async fn get_bot_statuses(
     processes: State<'_, BotProcesses>,
 ) -> Result<Vec<BotStatus>, String> {
-    let mut map = processes.0.lock().map_err(|e| e.to_string())?;
-    let statuses: Vec<BotStatus> = map
-        .iter_mut()
-        .map(|(id, child)| {
-            let running = child.try_wait().map(|s| s.is_none()).unwrap_or(false);
-            BotStatus { id: id.clone(), running }
-        })
-        .collect();
-    map.retain(|_, child| child.try_wait().map(|s| s.is_none()).unwrap_or(false));
-    Ok(statuses)
+    let map = processes.0.lock().map_err(|e| e.to_string())?;
+    Ok(map.keys().map(|id| BotStatus { id: id.clone(), running: true }).collect())
 }
 
-fn resolve_bot_agent(config: &BotConfig) -> Result<(String, Vec<String>), String> {
-    let candidates = [
-        "./bot_agent.py",
-        "../chat-app/bot_agent.py",
-        "../../chat-app/bot_agent.py",
-    ];
-    for path in &candidates {
-        if std::path::Path::new(path).exists() {
-            if which_on_path("uv") {
-                return Ok(("uv".into(), vec!["run".into(), path.to_string()]));
+async fn run_ollama_bot(
+    cfg: bot_framework::config::DverseConfig,
+    bot_name: String,
+    ollama_url: String,
+    ollama_model: String,
+    system_prompt: String,
+    mut cancel: tokio::sync::oneshot::Receiver<()>,
+) -> anyhow::Result<()> {
+    use std::sync::Arc;
+    use std::time::Duration;
+    use a2a::llm::{ChatMessage, OllamaClient};
+    use a2a::message::A2AMessage;
+    use bot_framework::{announce::{AgentAnnouncer, AgentInfo}, cert, node::NodeConfig, payload_crypto::{self, PayloadCipher}};
+
+    let cert_path = cert::cert_path(&cfg.cert_dir, &bot_name);
+    let key_path  = cert::key_path(&cfg.cert_dir, &bot_name);
+    let ca_path   = cert::ca_path(&cfg.cert_dir, &bot_name);
+
+    if cert::needs_renewal(&cert_path, Duration::from_secs(23 * 3600), Some(&cfg.operator_cn())).await {
+        let cert_cfg = cfg.cert_config_for(&bot_name)?;
+        cert::acquire(&cert_cfg).await?;
+    }
+
+    // Bot runs in the same process as the embedded router — connect via
+    // loopback instead of the mDNS hostname (tls/zenoh-<cn>.local) which
+    // may not resolve on the same machine.
+    let local_endpoint = format!("tls/127.0.0.1:{ROUTER_PORT}");
+    let session = NodeConfig::mtls(&local_endpoint, &ca_path, &cert_path, &key_path)
+        .skip_name_check()
+        .with_namespace(cfg.session_id())
+        .connect()
+        .await?;
+
+    let cn = cfg.operator_cn();
+    let inbox_topic = format!("dverse/a2a/{}/inbox", bot_name);
+
+    let _announcer = AgentAnnouncer::start(
+        session.clone(),
+        AgentInfo {
+            cn: &cn,
+            agent_name: &bot_name,
+            version: env!("CARGO_PKG_VERSION"),
+            publishes: vec![format!("dverse/a2a/*/inbox")],
+            subscribes: vec![inbox_topic.clone()],
+        },
+    );
+
+    let crypto_dir = cfg.cert_dir.join("megolm");
+    let cipher = Arc::new(Mutex::new(PayloadCipher::new(&bot_name, &crypto_dir)?));
+    cipher.lock().unwrap().publish_session_key(&crypto_dir, &bot_name)?;
+    payload_crypto::spawn_agent_key_relay(
+        Arc::clone(&cipher),
+        session.clone(),
+        cn.clone(),
+        bot_name.clone(),
+    );
+
+    let inbox = session
+        .declare_subscriber(&inbox_topic)
+        .await
+        .map_err(|e| anyhow::anyhow!("declare_subscriber: {e}"))?;
+
+    let llm = OllamaClient::new(&ollama_url, &ollama_model);
+    let mut history: Vec<ChatMessage> = Vec::new();
+
+    info!(bot = %bot_name, model = %ollama_model, "bot online");
+
+    loop {
+        let _ = cipher.lock().unwrap().refresh_receivers(&crypto_dir);
+
+        tokio::select! {
+            _ = &mut cancel => {
+                info!(bot = %bot_name, "bot cancelled");
+                break;
             }
-            return Ok(("python3".into(), vec![path.to_string()]));
+            result = inbox.recv_async() => {
+                let sample = match result {
+                    Ok(s) => s,
+                    Err(e) => { error!(error = %e, "inbox closed"); break; }
+                };
+
+                let bytes = sample.payload().to_bytes();
+                let plaintext = cipher.lock().unwrap().decrypt(&bytes).unwrap_or_else(|_| bytes.to_vec());
+
+                let msg: A2AMessage = match serde_json::from_slice(&plaintext) {
+                    Ok(m) => m,
+                    Err(e) => { warn!(error = %e, "bad A2AMessage"); continue; }
+                };
+
+                history.push(ChatMessage { role: "user".into(), content: msg.content.clone() });
+
+                let raw = match llm.respond(&system_prompt, &history).await {
+                    Ok(t) => t,
+                    Err(e) => { error!(error = %e, "Ollama call failed"); continue; }
+                };
+
+                let reply_text = if let (Some(close), _) = (raw.find("</think>"), ()) {
+                    raw[close + 8..].trim().to_string()
+                } else {
+                    raw.trim().to_string()
+                };
+
+                history.push(ChatMessage { role: "assistant".into(), content: reply_text.clone() });
+
+                let reply = A2AMessage::new(&bot_name, &msg.from, reply_text, msg.turn + 1);
+                let reply_topic = format!("dverse/a2a/{}/inbox", msg.from);
+                let payload = serde_json::to_vec(&reply)?;
+                let wire = cipher.lock().unwrap().encrypt(&payload).unwrap_or(payload);
+
+                session.put(&reply_topic, wire).await
+                    .map_err(|e| anyhow::anyhow!("put reply: {e}"))?;
+            }
         }
     }
-    if which_on_path("bot_agent") {
-        return Ok(("bot_agent".into(), vec![]));
-    }
-    let _ = config;
-    Err("bot_agent not found.".into())
-}
 
-fn which_on_path(cmd: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(cmd)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    Ok(())
 }
 
 // ── Tauri entry point ─────────────────────────────────────────────────────────

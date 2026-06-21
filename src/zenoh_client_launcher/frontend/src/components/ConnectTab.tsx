@@ -87,7 +87,7 @@ export default function ConnectTab() {
   }
 
   return (
-    <div className="max-w-lg space-y-6">
+    <div className="max-w-lg space-y-6 mx-auto">
       <div>
         <h2 className="text-lg font-semibold text-gray-100 mb-1">Network Connection</h2>
         <p className="text-sm text-gray-400">
