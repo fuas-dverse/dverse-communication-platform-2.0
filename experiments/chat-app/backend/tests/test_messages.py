@@ -341,3 +341,70 @@ class TestRowToMessage(unittest.TestCase):
         msg = messages_routes._row_to_message(row)
         self.assertTrue(msg.is_bot)
         self.assertEqual(msg.username, "alice")
+
+
+class TestParseZenohCommand(unittest.TestCase):
+    def test_valid_command_with_turns(self) -> None:
+        result = messages_routes._parse_zenoh_command("/zenoh @bot1 @bot2 5 discuss AI safety")
+        self.assertIsNotNone(result)
+        bot1, bot2, turns, prompt = result
+        self.assertEqual(bot1, "bot1")
+        self.assertEqual(bot2, "bot2")
+        self.assertEqual(turns, 5)
+        self.assertEqual(prompt, "discuss AI safety")
+
+    def test_valid_command_without_turns(self) -> None:
+        result = messages_routes._parse_zenoh_command("/zenoh @alpha @beta what is consciousness?")
+        self.assertIsNotNone(result)
+        _, _, turns, _ = result
+        self.assertEqual(turns, 3)
+
+    def test_turns_clamped_to_10(self) -> None:
+        result = messages_routes._parse_zenoh_command("/zenoh @a @b 99 test")
+        self.assertIsNotNone(result)
+        _, _, turns, _ = result
+        self.assertEqual(turns, 10)
+
+    def test_turns_clamped_to_1(self) -> None:
+        result = messages_routes._parse_zenoh_command("/zenoh @a @b 0 test")
+        self.assertIsNotNone(result)
+        _, _, turns, _ = result
+        self.assertEqual(turns, 1)
+
+    def test_no_match_returns_none(self) -> None:
+        self.assertIsNone(messages_routes._parse_zenoh_command("hello world"))
+        self.assertIsNone(messages_routes._parse_zenoh_command("/zenoh missing bots"))
+        self.assertIsNone(messages_routes._parse_zenoh_command("@bot1 @bot2 no slash"))
+
+
+class TestZenohCommandInPostMessage(MessagesTestCase):
+    def test_zenoh_command_missing_bots_inserts_error(self) -> None:
+        _seed_room(self.conn, room_id="room-1")
+        _seed_bot(self.conn, bot_id="bot-1", room_id="room-1", name="bot1")
+        user = _fake_user()
+        body = MessageCreate(content="/zenoh @bot1 @nonexistent 3 test prompt")
+
+        result = self._run(messages_routes.post_message(room_id="room-1", body=body, current_user=user))
+
+        self.assertEqual(result.content, "/zenoh @bot1 @nonexistent 3 test prompt")
+        error_row = self.conn.execute(
+            "SELECT content FROM messages WHERE content LIKE '%A2A Error%'"
+        ).fetchone()
+        self.assertIsNotNone(error_row)
+        self.assertIn("nonexistent", error_row["content"])
+
+    def test_zenoh_command_both_bots_found_creates_task(self) -> None:
+        _seed_room(self.conn, room_id="room-1")
+        _seed_bot(self.conn, bot_id="bot-1", room_id="room-1", name="bot1")
+        _seed_bot(self.conn, bot_id="bot-2", room_id="room-1", name="bot2")
+        user = _fake_user()
+        body = MessageCreate(content="/zenoh @bot1 @bot2 2 discuss philosophy")
+
+        with patch("backend.services.a2a.run_a2a_session", new_callable=AsyncMock):
+            with patch("asyncio.create_task") as mock_create_task:
+                result = self._run(
+                    messages_routes.post_message(room_id="room-1", body=body, current_user=user)
+                )
+
+        self.assertEqual(result.content, "/zenoh @bot1 @bot2 2 discuss philosophy")
+        mock_create_task.assert_called_once()
