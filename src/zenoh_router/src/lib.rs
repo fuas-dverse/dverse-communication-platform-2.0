@@ -11,6 +11,7 @@
 pub mod admission_handler;
 pub mod constants;
 pub mod discovery;
+pub mod kick_handler;
 pub mod logging;
 pub mod router;
 pub mod state;

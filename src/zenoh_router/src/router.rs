@@ -76,6 +76,7 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
                 s.banned_cns.clear();
                 s.join_flow = None;
                 s.connected_nodes.clear();
+                s.kicked_screen = None;
             }
             // Drop mDNS so its TXT (cn=, session=) re-publishes with the new
             // session_id. The new handle is constructed below.
@@ -226,6 +227,21 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
             })
         };
 
+        // Kick/ban control plane (#111): subscribes to
+        // dverse/session/control/{kick,rotation}/* so the member can react to
+        // a KickNotice addressed at its own CN or install a new GroupReceiver
+        // from a SessionKeyRotation. Spawned per session, aborted on restart.
+        let kick_handle = {
+            let s = session.clone();
+            let st = Arc::clone(&state);
+            let cn = operator_cn.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::kick_handler::run(s, st, cn).await {
+                    warn!(error = %e, "kick control plane exited");
+                }
+            })
+        };
+
         // Client role: auto-(re)send a JoinRequest. We republish on TWO
         // schedules so the request can't get stuck in dead air:
         //   (a) Every time we enter Running (session restart, ACL reload).
@@ -324,6 +340,7 @@ pub async fn run(state: Arc<Mutex<AppState>>) {
         }
 
         admission_handle.abort();
+        kick_handle.abort();
         if let Some(h) = republish_handle.take() {
             h.abort();
         }

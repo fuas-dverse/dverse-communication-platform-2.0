@@ -508,6 +508,58 @@ mod tests {
         assert!(admin_state.lock().unwrap().pending_requests.is_empty());
     }
 
+    /// A banned CN's JoinRequest MUST be silently dropped by `handle_request`
+    /// before it lands in the admin's pending panel. Locks in the
+    /// admission_handler-side half of the kick/ban contract from #111.
+    #[test]
+    fn handle_request_drops_banned_cn_before_panel() {
+        use crate::state::AppState;
+        use bot_framework::config::SessionRole;
+        use std::sync::Mutex;
+
+        let mut admin_state = AppState::new(None);
+        admin_state.session_role = SessionRole::Admin;
+        admin_state.crypto = Some(crate::state::SessionCryptoState::new(true));
+        // Ban bob's CN before any request arrives.
+        admin_state.banned_cns.insert("bob".to_string());
+        let admin_state = Mutex::new(admin_state);
+
+        // Build a fully-valid JoinRequest (so we know the drop is on the
+        // ban path, not a verification failure).
+        let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        let mut dn = rcgen::DistinguishedName::new();
+        dn.push(rcgen::DnType::CommonName, "bob");
+        params.distinguished_name = dn;
+        let kp = rcgen::KeyPair::generate().unwrap();
+        let cert = params.self_signed(&kp).unwrap();
+        let cert_pem = cert.pem();
+        let key_pem = kp.serialize_pem();
+
+        let mut bob = SessionIdentity::new();
+        let otk = bob.generate_one_time_keys(1)[0];
+        bob.mark_keys_as_published();
+        let binding =
+            sign_enc_binding_pem(&key_pem, "bob", &bob.curve25519_key()).unwrap();
+
+        let req = JoinRequest {
+            requester_cn: "bob".into(),
+            identity_key: bob.curve25519_key_base64(),
+            fingerprint_key: bob.ed25519_key_base64(),
+            one_time_key: otk.to_base64(),
+            binding_signature_b64: B64.encode(&binding.signature),
+            cert_pem,
+            note: Some("let me back in".into()),
+            requested_at: "0".into(),
+        };
+        let payload = serde_json::to_vec(&req).unwrap();
+
+        super::handle_request(&admin_state, &payload).expect("banned drop is success");
+        assert!(
+            admin_state.lock().unwrap().pending_requests.is_empty(),
+            "banned CN's request must never reach the pending panel"
+        );
+    }
+
     /// A fresh requester (no Olm session with the admin) MUST fail to
     /// decrypt an Allow sealed to someone else.
     #[test]

@@ -69,6 +69,21 @@ pub struct AppState {
     /// Bridge tokens issued by the admin. Each token allows a plain-TCP
     /// client to connect without mTLS, restricted to rooms + announce topics.
     pub bridge_tokens: Vec<String>,
+    /// Set on a member when the admin publishes a `KickNotice` matching this
+    /// node's CN. The Tauri snapshot routes the GUI to the Kicked screen and
+    /// surfaces `reason` + `banned`. Cleared by `back_to_chooser`. `None`
+    /// outside of a kicked state.
+    pub kicked_screen: Option<KickedState>,
+}
+
+/// Member-side flag set when this node received a `KickNotice` addressed to
+/// its own CN. Carries the admin's reason for display, plus whether the
+/// admin also banned the CN (informational — the ban list is admin-only,
+/// RAM-only state).
+#[derive(Debug, Clone)]
+pub struct KickedState {
+    pub reason: Option<String>,
+    pub banned: bool,
 }
 
 /// Per-session crypto material. Lifetime = one Zenoh session as a member
@@ -240,6 +255,7 @@ impl AppState {
             config_changed: Arc::new(Notify::new()),
             zenoh_session: None,
             bridge_tokens: Vec::new(),
+            kicked_screen: None,
         }
     }
 
