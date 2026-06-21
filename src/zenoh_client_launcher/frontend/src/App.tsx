@@ -7,6 +7,7 @@ import ChooserScreen from "./components/ChooserScreen";
 import RequestingJoinScreen from "./components/RequestingJoinScreen";
 import LoadingScreen from "./components/LoadingScreen";
 import MainScreen from "./components/MainScreen";
+import KickedScreen from "./components/KickedScreen";
 import ConnectTab from "./components/ConnectTab";
 import BotsTab from "./components/BotsTab";
 import GraphTab from "./components/GraphTab";
@@ -94,6 +95,14 @@ export default function App() {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-950">
         <LoadingScreen lastLog={snapshot.log.at(-1)} />
+      </div>
+    );
+  }
+
+  if (snapshot.screen === "kicked" && snapshot.kicked) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-950">
+        <KickedScreen kicked={snapshot.kicked} />
       </div>
     );
   }

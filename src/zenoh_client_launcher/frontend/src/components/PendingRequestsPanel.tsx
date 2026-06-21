@@ -7,14 +7,18 @@ interface Props {
 }
 
 /**
- * Admin-side side panel rendered inside MainScreen when there are pending
- * join requests. Each row shows the requester's CN + optional note and an
- * Allow / Deny pair that calls into `admit_request` / `deny_request`.
+ * Admin-side section rendered inside MainScreen's admin-only side panel.
+ * Each row shows the requester's CN + optional note and an Allow / Deny
+ * pair that calls into `admit_request` / `deny_request`.
+ *
+ * Container: MainScreen wraps this AND `AdmittedMembersPanel` in a single
+ * `<aside>` so they share the right rail. This component renders just the
+ * pending-requests section (no border / width / overflow).
  */
 export default function PendingRequestsPanel({ requests }: Props) {
   if (requests.length === 0) return null;
   return (
-    <aside className="w-72 shrink-0 border-l border-gray-800 bg-gray-900/40 overflow-y-auto">
+    <div>
       <div className="px-4 py-2 border-b border-gray-800 text-xs font-medium text-gray-400">
         Pending join requests
       </div>
@@ -23,7 +27,7 @@ export default function PendingRequestsPanel({ requests }: Props) {
           <RequestRow key={r.requester_cn} req={r} />
         ))}
       </ul>
-    </aside>
+    </div>
   );
 }
 

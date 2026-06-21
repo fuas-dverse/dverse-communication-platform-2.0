@@ -1,14 +1,24 @@
 import type { AppSnapshot, AgentStatus, RouterStatus, NodeInfo } from "../types";
 import PendingRequestsPanel from "./PendingRequestsPanel";
+import AdmittedMembersPanel from "./AdmittedMembersPanel";
 
 interface Props {
   snapshot: AppSnapshot;
 }
 
 export default function MainScreen({ snapshot }: Props) {
-  const { router_status, session_id, session_role, connected_nodes, log, pending_requests } =
-    snapshot;
+  const {
+    router_status,
+    session_id,
+    session_role,
+    connected_nodes,
+    log,
+    pending_requests,
+    admitted,
+  } = snapshot;
   const isAdmin = session_role.kind === "admin";
+  // For admin role, session_id == operator_cn (see bot_framework::config).
+  const selfCn = session_id;
 
   return (
     <div className="flex flex-col h-full">
@@ -65,8 +75,16 @@ export default function MainScreen({ snapshot }: Props) {
           </div>
         </div>
 
-        {/* Admin-only side panel for join requests */}
-        {isAdmin && <PendingRequestsPanel requests={pending_requests} />}
+        {/* Admin-only side panel — pending join requests on top, admitted
+            members (with Kick/Ban) below. Both render `null` when empty so
+            the panel auto-collapses on a clean session. */}
+        {isAdmin &&
+          (pending_requests.length > 0 || admitted.filter((cn) => cn !== selfCn).length > 0) && (
+            <aside className="w-72 shrink-0 border-l border-gray-800 bg-gray-900/40 overflow-y-auto">
+              <PendingRequestsPanel requests={pending_requests} />
+              <AdmittedMembersPanel admitted={admitted} selfCn={selfCn} />
+            </aside>
+          )}
       </div>
     </div>
   );
