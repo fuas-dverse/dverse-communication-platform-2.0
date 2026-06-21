@@ -64,8 +64,8 @@ pub enum AdmissionDecision {
         /// (e.g. `KickNotice`, #145) against it. Trust bootstrap: TOFU at
         /// the same level as `admin_identity_key` (the implicit binding is
         /// "the Olm decrypt of this Allow succeeded under that Curve25519
-        /// key" — extending that bond to the sibling Ed25519 inherits the
-        /// same model without re-keying the wire envelope).
+        /// key", and extending that bond to the sibling Ed25519 inherits
+        /// the same model without re-keying the wire envelope).
         admin_ed25519_key: String,
         /// RFC3339 timestamp.
         admitted_at: String,

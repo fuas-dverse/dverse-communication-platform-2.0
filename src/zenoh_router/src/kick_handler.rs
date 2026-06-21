@@ -167,7 +167,7 @@ pub fn prepare_rotation(
     // Sign the canonical (kicked_cn, kicked_at, banned) bytes with the
     // admin's vodozemac Ed25519 key. `reason` is intentionally not signed
     // (see `kick_signing_bytes`). The wire field `admin_ed25519_key_b64`
-    // is informational — receivers verify against the Ed25519 they pinned
+    // is informational; receivers verify against the Ed25519 they pinned
     // at admission time (#145).
     let kicked_at = unix_epoch_secs();
     let crypto = st.crypto.as_ref().unwrap();
@@ -290,7 +290,7 @@ fn handle_kick(state: &Mutex<AppState>, my_cn: &str, payload: &[u8]) -> Result<(
             return Ok(());
         };
         let Some(anchor_b64) = crypto.session_admin_ed25519_b64.as_deref() else {
-            // No pinned admin identity — admission either hasn't completed
+            // No pinned admin identity: admission either hasn't completed
             // or this node is the admin (admins don't kick themselves).
             debug!("kick verification skipped: no pinned admin Ed25519 anchor");
             return Ok(());
@@ -641,10 +641,10 @@ mod tests {
     }
 
     /// Test helper: construct a signed KickNotice. Calls the SAME
-    /// canonical-bytes helper the production admin path uses — this is the
-    /// test-side mirror of the production single-source-of-truth, and is
-    /// what makes the "mutated after signing" tests faithful (no re-sign,
-    /// mutation happens on the constructed struct).
+    /// canonical-bytes helper the production admin path uses, which is
+    /// the test-side mirror of the production single-source-of-truth, and
+    /// is what makes the "mutated after signing" tests faithful (no
+    /// re-sign, mutation happens on the constructed struct).
     fn signed_kick_notice(
         admin: &SessionIdentity,
         kicked_cn: &str,
@@ -673,7 +673,7 @@ mod tests {
         let admin = SessionIdentity::new();
         let state = member_state_pinned_to(&admin);
 
-        // Notice for someone else — no-op (we never even verify; the
+        // Notice for someone else: no-op (we never even verify; the
         // self-match short-circuit returns before the auth gate).
         let other = signed_kick_notice(&admin, "alice", None, false, "0");
         super::handle_kick(&state, "bob", &serde_json::to_vec(&other).unwrap()).unwrap();
@@ -749,7 +749,7 @@ mod tests {
 
     /// Acceptance criterion: a notice signed by a different admitted
     /// member (not the admin) must fail verification. We populate the
-    /// notice's carried key with the impostor's Ed25519 too — the stored
+    /// notice's carried key with the impostor's Ed25519 too, so the stored
     /// anchor mismatch is itself a drop signal.
     #[test]
     fn kick_signed_by_non_admin_member_fails_verify() {
@@ -757,7 +757,7 @@ mod tests {
         let impostor = SessionIdentity::new();
         let state = member_state_pinned_to(&admin);
         // Impostor builds a complete, internally-consistent notice (their
-        // sig over the canonical bytes, their carried Ed25519 key) — but
+        // sig over the canonical bytes, their carried Ed25519 key), but
         // the stored anchor is the admin's, so the carried-key check trips
         // first.
         let notice =
@@ -787,7 +787,7 @@ mod tests {
     }
 
     /// Design-pinning test: `reason` is intentionally NOT part of the
-    /// canonical signing bytes (it's display copy only — see the
+    /// canonical signing bytes (it's display copy only, see the
     /// `kick_signing_bytes` doc). Mutating it after signing therefore
     /// MUST still verify and tear down. Pair-test for
     /// `kick_with_mutated_*_fails_verify`: if the design ever flips to
