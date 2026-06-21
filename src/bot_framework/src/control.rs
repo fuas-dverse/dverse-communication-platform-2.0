@@ -7,14 +7,16 @@
 //! * `dverse/session/control/kick/<kicked_cn>` — `KickNotice`,
 //!   admin → kicked member. JSON, plaintext.
 //!
-//!   Authentication note: the session-rule allows ANY cert holder to publish
-//!   on `dverse/session/**`, which means an admitted member could in principle
-//!   forge a `KickNotice` targeted at a peer. The client GUI mitigates this by
-//!   tearing down only when it ALSO observes the Megolm session it holds stop
-//!   decrypting fresh traffic (i.e. the admin actually rotated). For a
-//!   stronger guarantee a future spike can sign `KickNotice` with the admin's
-//!   Ed25519 fingerprint; the wire type already carries the field so a
-//!   downstream change won't bump the topic version.
+//!   Authentication note (unmitigated): the session-rule allows ANY cert
+//!   holder to publish on `dverse/session/**`, so an admitted member could
+//!   forge a `KickNotice` targeted at a peer and the receiver would currently
+//!   tear down on the first match — `kick_handler::handle_kick` does NOT
+//!   cross-check against a rotation having actually happened, nor does it
+//!   verify a sender signature. The issue's acceptance criteria don't require
+//!   unforgeable kicks, but this is a known soft-spot to address in a follow
+//!   up (signing the notice with the admin's Ed25519 fingerprint is the
+//!   intended hardening; the wire type already carries `kicked_cn` and
+//!   `reason` so a future signature field can be added additively).
 //!
 //! * `dverse/session/control/rotation/<member_cn>` — `SessionKeyRotation`,
 //!   admin → one remaining member. Carries an Olm `Normal` message whose

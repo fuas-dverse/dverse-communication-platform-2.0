@@ -471,14 +471,19 @@ fn back_to_chooser(state: State<'_, AppStateWrapper>) -> Result<(), String> {
         Arc::clone(&st.router)
     };
     let mut r = router.lock().map_err(|e| e.to_string())?;
-    // Tear down the session view so the chooser starts fresh.
+    // Tear down the session view so the chooser starts fresh. We don't touch
+    // `banned_cns` here — back_to_chooser is the kicked MEMBER's exit, so
+    // their ban list is empty by construction; on the admin side it would be
+    // wiped by the next session boot in router.rs anyway, and clearing it
+    // here would silently nuke active bans if anyone wired this command to
+    // an admin context later. Keep this command opinionated to the kicked
+    // member's flow.
     r.router_status = zr::RouterStatus::Idle;
     r.session_id = String::new();
     r.connected_nodes.clear();
     r.admitted.clear();
     r.crypto = None;
     r.pending_requests.clear();
-    r.banned_cns.clear();
     r.join_flow = None;
     r.kicked_screen = None;
     r.log.clear();
