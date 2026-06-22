@@ -158,6 +158,24 @@ class TestCallBot(A2ATestCase):
             timeout=120.0,
         )
 
+    def test_calls_llm_for_local_provider(self):
+        from backend.services.a2a import _call_bot
+        bot = _make_bot("bot-1", "room-1", "local-bot", provider=BotProvider.LOCAL)
+
+        with patch("backend.services.llm.build_bot_response", return_value="llm reply"):
+            result = self._run(_call_bot(bot, "hello", [], "room-1"))
+
+        self.assertEqual(result, "llm reply")
+
+    def test_calls_llm_for_claude_provider(self):
+        from backend.services.a2a import _call_bot
+        bot = _make_bot("bot-1", "room-1", "claude-bot", provider=BotProvider.CLAUDE)
+
+        with patch("backend.services.llm.build_bot_response", return_value="claude reply"):
+            result = self._run(_call_bot(bot, "hello", [], "room-1"))
+
+        self.assertEqual(result, "claude reply")
+
 
 # ---------------------------------------------------------------------------
 # run_a2a_session — happy path

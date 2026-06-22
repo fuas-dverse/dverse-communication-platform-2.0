@@ -10,13 +10,22 @@ from ..telemetry import a2a_sessions, a2a_session_duration, a2a_turns, a2a_turn_
 
 
 async def _call_bot(bot: BotConfig, message: str, history: list[dict], room_id: str) -> str:
-    from .zenoh_bridge import zenoh_bridge
-    return await zenoh_bridge.request(
-        room_id=room_id,
-        bot_name=bot.name,
-        message=message,
-        history=history,
-        timeout=120.0,
+    import asyncio
+    from ..models.bot import BotProvider
+    if bot.provider == BotProvider.ZENOH:
+        from .zenoh_bridge import zenoh_bridge
+        return await zenoh_bridge.request(
+            room_id=room_id,
+            bot_name=bot.name,
+            message=message,
+            history=history,
+            timeout=120.0,
+        )
+    from .llm import build_bot_response
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        lambda: build_bot_response(bot, message, history),
     )
 
 
