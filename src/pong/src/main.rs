@@ -15,7 +15,7 @@ const NODE_NAME: &str = "pong";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    bot_framework::logging::init();
+    dverse_obs::init("dverse-pong");
     let cfg = DverseConfig::load()
         .expect("No dverse config found. Run the router first to log in.");
 

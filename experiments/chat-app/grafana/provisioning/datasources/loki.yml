@@ -1,0 +1,17 @@
+apiVersion: 1
+
+# Loki sits next to Prometheus as the chat-app's log backend.  The OTel
+# collector forwards OTLP logs to Loki's native `/otlp` endpoint
+# (see `otel-collector-config.yaml`), so any service that exports OTLP
+# logs — the Python backend, and any Rust binary that calls
+# `dverse_obs::init()` with `OTEL_EXPORTER_OTLP_ENDPOINT` set — shows up
+# here automatically.
+#
+# Query example in Grafana → Explore:  `{service_name="dverse-ping"}`
+datasources:
+  - name: Loki
+    type: loki
+    uid: chatapp-loki
+    access: proxy
+    url: http://chatapp-loki:3100
+    editable: false

@@ -1,0 +1,31 @@
+[package]
+name = "dverse-obs"
+version = "0.1.0"
+edition = "2024"
+description = "Shared structured-logging/OTel bootstrap for dverse Rust services."
+
+[lib]
+name = "dverse_obs"
+path = "src/lib.rs"
+
+[dependencies]
+# stdout/stderr layer — present in every binary, so no env gate.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# OTLP export of `tracing` events + spans.  Gated at runtime by the
+# OTEL_EXPORTER_OTLP_ENDPOINT env var so unit tests and `cargo run`
+# without the compose stack remain silent on the network.
+#
+# The opentelemetry / opentelemetry-otlp / tracing-opentelemetry trio is
+# notoriously version-fragile — bump them together or expect "cannot
+# find type" diagnostics from incompatible re-exports.
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = [
+    "grpc-tonic",
+    "trace",
+    "logs",
+] }
+opentelemetry-appender-tracing = "0.27"
+tracing-opentelemetry = "0.28"

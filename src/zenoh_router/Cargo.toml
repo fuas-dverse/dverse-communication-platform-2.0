@@ -23,6 +23,7 @@ egui-gui = ["dep:eframe", "dep:egui"]
 anyhow = "1"
 base64 = "0.22"
 bot-framework = { path = "../bot_framework" }
+dverse-obs = { path = "../dverse_obs" }
 clap = { version = "4", features = ["derive"] }
 dirs = "5"
 serde = { version = "1", features = ["derive"] }
