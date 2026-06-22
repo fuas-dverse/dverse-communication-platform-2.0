@@ -1,6 +1,3 @@
-# Build: docker build --build-arg VITE_API_BASE="" -t REGISTRY/dverse-frontend:latest experiments/chat-app/frontend/
-# VITE_API_BASE="" → frontend JS uses relative URLs → nginx in this pod proxies /api/ to backend:8080.
-# Replace REGISTRY with your container registry (e.g. ghcr.io/your-org).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,7 +15,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: REGISTRY/dverse-frontend:latest
+          image: ghcr.io/fuas-dverse/dverse-frontend:latest
           ports:
             - containerPort: 80
           readinessProbe:

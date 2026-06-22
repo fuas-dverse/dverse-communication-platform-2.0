@@ -1,5 +1,3 @@
-# Build: docker build -t REGISTRY/dverse-backend:latest experiments/chat-app/backend/
-# Replace REGISTRY with your container registry (e.g. ghcr.io/your-org).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,7 +15,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: REGISTRY/dverse-backend:latest
+          image: ghcr.io/fuas-dverse/dverse-backend:latest
           ports:
             - containerPort: 8080
           env:
@@ -37,16 +35,6 @@ spec:
               value: production
             - name: LOCAL_LLM_URL
               value: http://ollama:11434
-            - name: SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: SECRET_KEY
-            - name: ANTHROPIC_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: backend-secrets
-                  key: ANTHROPIC_API_KEY
             - name: LOGFIRE_TOKEN
               valueFrom:
                 secretKeyRef:
