@@ -1,0 +1,479 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{Latin Modern Roman}
+\setsansfont{Latin Modern Sans}
+\setmonofont{Hack}[Scale=0.85]
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage[dvipsnames,table]{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit,backgrounds,shapes.geometric,calc,decorations.pathmorphing}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{adjustbox}
+\usepackage[most]{tcolorbox}
+
+\definecolor{router}{HTML}{E74C3C}
+\definecolor{admitted}{HTML}{2ECC71}
+\definecolor{denied}{HTML}{E74C3C}
+\definecolor{tls}{HTML}{2ECC71}
+\definecolor{cipher}{HTML}{9B59B6}
+\definecolor{session}{HTML}{3498DB}
+\definecolor{ca}{HTML}{F39C12}
+\definecolor{codebg}{HTML}{F8F8F8}
+\definecolor{codeframe}{HTML}{DDDDDD}
+\definecolor{nixblue}{HTML}{5277C3}
+\definecolor{soft}{HTML}{F4F6F8}
+
+\newtcolorbox{abstractbox}[1][]{
+  enhanced, colback=soft, colframe=nixblue,
+  boxrule=0.6pt, arc=2pt, left=10pt, right=10pt, top=8pt, bottom=8pt,
+  title=\textbf{Abstract}, coltitle=white, colbacktitle=nixblue,
+  fonttitle=\sffamily\bfseries, #1
+}
+\newtcolorbox{findingbox}[1][]{
+  enhanced, colback=soft, colframe=router,
+  boxrule=0.6pt, arc=2pt, left=10pt, right=10pt, top=8pt, bottom=8pt,
+  title=\textbf{Finding}, coltitle=white, colbacktitle=router,
+  fonttitle=\sffamily\bfseries, #1
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  breakatwhitespace=true,
+  tabsize=2,
+  showstringspaces=false,
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textit{Iterating on the Zenoh security model}}
+\fancyhead[R]{\small\textit{DVerse Platform}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black,
+}
+
+\title{%
+  \vspace{-1cm}
+  {\LARGE\bfseries Iterating on the Zenoh Security Model:\\
+  Three Hypotheses, Two Disconfirmations, One Pivot}
+}
+\author{Yordan Mitev}
+\date{\today}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+\begin{abstractbox}
+  Across three sprints I iterated the Zenoh security model for the
+  DVerse platform from open pub/sub, through mTLS authentication,
+  to admission-driven Megolm encryption. Each iteration started
+  from a hypothesis about what was enough; each of the first two
+  was disconfirmed by something specific that the next iteration
+  set out to fix. This document is the condensed version of that
+  journey: what each step looked like, why it stopped being
+  enough, and what replaced it. The full evaluation lives in
+  \emph{Zenoh evaluation and security architecture}, and the code
+  is described in \emph{Framework architecture and integration}.
+\end{abstractbox}
+
+\vspace{1em}
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{tabular}{|l|l|p{8cm}|}
+    \hline
+    \rowcolor{gray!15}
+    \textbf{Version} & \textbf{Date} & \textbf{Changes} \\
+    \hline
+    V1 & 9 June 2026 & Initial writeup of the V1 \(\rightarrow\)
+    V2 \(\rightarrow\) V3 iteration, the central ``ACLs are not
+    enough'' finding, the method and results, and the remaining
+    open questions. \\
+    \hline
+  \end{tabular}
+  \caption{Revision history.}
+  \label{tab:iter-history}
+\end{table}
+
+\newpage
+\tableofcontents
+\newpage
+
+% ==============================================================
+\section{Framing}
+% ==============================================================
+
+The DVerse design challenge is a decentralised communication
+platform for humans and AI agents, built on Zenoh and Rust. Security
+of communication is the part of the challenge I owned. The plan at
+sprint 1 was to spend a couple of sprints learning Zenoh's built-in
+security model, then commit to a design. The plan held for the
+first two sprints. It did not survive contact with sprint 3.
+
+What follows is a short trace of three iterations on the security
+model, structured the way each iteration actually happened: a
+hypothesis about what was enough, an attempt to ship it, and the
+finding that closed it off as a final state.
+
+% ==============================================================
+\section{V1: Open Pub/Sub}
+% ==============================================================
+
+\textbf{Hypothesis.} A flat Zenoh fabric with a known router
+endpoint is enough for a research prototype. The platform is being
+prototyped end-to-end and the security model can be slotted in
+later.
+
+\textbf{What shipped.} A ping-pong demo in Rust using stock Zenoh.
+Two agents, no authentication, plaintext payloads. Documented in
+V1 of the security doc.
+
+\textbf{Disconfirmation.} The first non-localhost demo. Anyone on
+the same LAN can subscribe to any topic by default, because Zenoh
+ships with multicast scouting on by default. The
+``decentralised but private'' goal in the design challenge fell
+apart at the first network-attached demo with another laptop on
+the same Wi-Fi.
+
+V1 was the easy iteration. The disconfirmation was expected; the
+purpose of V1 was to learn the Zenoh API and to have a working
+ping-pong to layer security onto.
+
+% ==============================================================
+\section{V2: mTLS}
+% ==============================================================
+
+\textbf{Hypothesis.} Pin every router and every agent to a leaf
+certificate issued by a private CA. Configure Zenoh's transport
+layer to require client authentication. Only cert holders can
+join the fabric, and that solves the V1 leak.
+
+\textbf{What shipped.} A step-ca instance backed by Keycloak (OIDC
+identity), short-lived (24-hour) leaf certificates for every
+operator and every agent, and a Zenoh transport that rejects
+connections without a valid CA-signed cert at the TLS handshake.
+Mutual authentication, both ends present a cert. Documented in V2
+of the security doc.
+
+\textbf{Disconfirmation.} mTLS authenticates the fabric, but
+every cert holder is on the same fabric. A platform that hosts
+multiple parallel sessions (one team's working group, another
+team's working group, the admin's own session) cannot use mTLS
+alone to keep team A out of team B's traffic. They all have valid
+certs from the same CA. The fabric is private; the groups inside
+it are not.
+
+The fix that V2 sketched in its ``Future Work'' section was Zenoh's
+ACL configuration. ACLs can match on the cert's common name and
+allow or deny per topic per CN. The plan was to admit a CN to a
+session by writing it into the session's ACL block; deny by
+removing it. Then I tried to ship that, and ran into the central
+finding of this experiment.
+
+% ==============================================================
+\section{The Finding: ACLs Are Read Once}
+% ==============================================================
+
+\begin{findingbox}
+Zenoh's ACL configuration is consumed when the Zenoh session is
+opened. There is no API to mutate the admitted-CN list afterwards,
+and no published RFC to add one. Changing who can publish or
+subscribe to a topic requires building a new \texttt{Config},
+closing the running \texttt{Session}, and calling
+\texttt{zenoh::open(config)} again. While the session is closed,
+no message gets through.
+\end{findingbox}
+
+This is the discovery that closed V2 as a final state. For a
+system whose admin makes accept/deny decisions at runtime, ACL
+mutation is the common path on the data plane. Doing that with
+static ACLs means the data plane is interrupted every time a
+member joins or leaves. The continuous availability that the
+platform exists to provide is violated each time someone uses it.
+
+The router code in \texttt{src/zenoh\_router/src/router.rs} carries
+this restriction openly. The outer \texttt{run()} loop returns
+from \texttt{session\_loop} whenever the admitted set changes,
+aborts the admission handler, closes the Zenoh session, marks
+itself \texttt{RouterStatus::Reloading}, and iterates. A new
+session opens against the updated ACL. Until it opens, the router
+is offline on the wire.
+
+Numerically, the cost is impossible to make small. Even a perfect
+session rebuild takes hundreds of milliseconds (cert reload,
+listener bind, peer reconnect, subscriber re-declare). With a
+realistic admission workload (a handful of joins during a working
+session), the result is a noticeable choppiness that nothing in
+the application can route around.
+
+The conclusion was that ACLs cannot be the primary access-control
+layer of a system with runtime admission. They are workable as a
+fabric-level gate that changes rarely; they are not workable as
+the per-action knob.
+
+% ==============================================================
+\section{V3: Admission Plus Megolm}
+% ==============================================================
+
+\textbf{Hypothesis.} Move the per-action access control off the
+fabric and into a cryptographic layer above it. Admission becomes
+a handshake. Payloads are encrypted with a per-session Megolm
+\texttt{SessionKey}. A peer that holds the cert but does not hold
+the session key sees opaque ciphertext, even where the ACL would
+let it subscribe.
+
+\textbf{What shipped.}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item An admission protocol with two well-known topics under
+        \path{dverse/session/}: the requester publishes a signed
+        \texttt{JoinRequest} on \path{requests/<cn>}, the admin
+        replies with an \texttt{Allow} or \texttt{Deny} decision
+        on \path{admission/<cn>}.
+  \item An ECDSA P-256 binding signature that ties the
+        requester's vodozemac Curve25519 identity key to its TLS
+        cert's CN. The admin verifies the signature against the
+        cert before deciding.
+  \item An Olm pre-key wrap of the admin's Megolm
+        \texttt{SessionKey}, addressed to the requester's
+        one-time prekey. Only the requester can decrypt it; once
+        decrypted, the requester installs a
+        \texttt{GroupReceiver} keyed by the admin's session id.
+  \item Per-payload Megolm AEAD on every agent message. The
+        cipher dispatches incoming envelopes by their embedded
+        \texttt{sender\_id} to the correct \texttt{GroupReceiver}.
+  \item A cross-machine relay on
+        \path{dverse/agent_keys/**} that republishes each agent's
+        outbound \texttt{SessionKey} every five seconds, with a
+        subscriber that installs each envelope idempotently.
+  \item A coarsened fabric ACL: one broad allow rule for
+        \texttt{dverse/**} scoped to the admitted CNs. The rule
+        still rebuilds the Zenoh session on real membership
+        changes, but membership changes are now the common case,
+        not the per-action case.
+\end{itemize}
+
+\textbf{Outcome.} Verified end-to-end on a two-machine LAN with
+two operators, each running ping and pong agents. Cross-machine
+ping-pong decrypts on the first agent-key relay tick (sub-second
+in practice). Adding a new operator to the session adds two
+network round-trips (the join request and the admission
+decision); no payloads are dropped on the data plane during
+admission because the data plane is encrypted, not gated.
+
+% ==============================================================
+\section{Method}
+% ==============================================================
+
+In rough order:
+
+\begin{enumerate}[leftmargin=1.6em]
+  \item Read Zenoh's ACL implementation to confirm the
+        finding. Searched for any reload, refresh, or update API.
+        There is none. The ACL block is read in
+        \texttt{zenoh::open} and not consulted again.
+  \item Observed the rebuild cost manually. Running ping-pong
+        between two operators, an admin's
+        \texttt{admit\_request} drops the agent on the admin side
+        for several seconds (the session rebuild) while ping
+        keeps producing payloads that never arrive. The
+        ``micro-outage'' is loud enough to see in the agent
+        logs.
+  \item Designed the admission handshake on paper. Picked
+        Olm/Megolm because the project's threat model maps
+        closely to Matrix's (group communication, per-message
+        forward secrecy, key delivery as part of group join).
+        Adopted vodozemac as the Rust implementation.
+  \item Designed the cryptographic identity binding so that a
+        compromise of an unrelated Curve25519 key cannot
+        impersonate an operator. Domain-separated, length-prefixed
+        message; ECDSA P-256 signature with the TLS leaf's
+        private key; verifier extracts the public key from the
+        leaf cert.
+  \item Implemented the wire format
+        (\texttt{src/bot\_framework/src/admission.rs}) and the
+        handshake handler
+        (\texttt{src/zenoh\_router/src/admission\_handler.rs}).
+  \item Implemented the per-process Megolm cipher
+        (\texttt{src/bot\_framework/src/payload\_crypto.rs}) and
+        the same-machine filesystem mechanism for key sharing.
+  \item Found, while testing across two physical machines, that
+        same-machine peers decrypt each other and cross-machine
+        peers do not. Added the agent-key wire relay to cover
+        that case.
+  \item Found, while testing logout-then-rejoin flows, that the
+        router silently kept its previous session config across
+        restarts. Added the \texttt{config\_changed} doorbell to
+        force the router to consume the staged config on every
+        outer-loop iteration.
+\end{enumerate}
+
+% ==============================================================
+\section{Results}
+% ==============================================================
+
+Table~\ref{tab:iter-result-shape} summarises the cost shape of
+each iteration. The numbers are qualitative because the experiment
+is observational, not benchmarked; quantitative measurement is a
+follow-up if needed.
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{tabular}{|p{5.4cm}|p{1.4cm}|p{2.6cm}|p{4cm}|}
+    \hline
+    \rowcolor{gray!15}
+    \textbf{Operation} & \textbf{V1} & \textbf{V2} & \textbf{V3} \\
+    \hline
+    Outsider sees plaintext on wire & yes & no (mTLS) & no (mTLS) \\
+    \hline
+    Outsider with cert sees plaintext & N/A & yes & no (Megolm) \\
+    \hline
+    Per-admission data-plane interruption & N/A & yes (session rebuild) & no (key install only) \\
+    \hline
+    Per-payload crypto cost & none & TLS only & TLS + Megolm AEAD \\
+    \hline
+    Cross-machine peer-key discovery & N/A & N/A & 5\,s republish; sub-second typical \\
+    \hline
+  \end{tabular}
+  \caption{Cost shape of each iteration.}
+  \label{tab:iter-result-shape}
+\end{table}
+
+The end-to-end demonstration was a two-machine, two-operator
+session. On machine A, operator ``test1'' running an admin router,
+a ping agent, and a pong agent. On machine B, operator ``test2''
+running a client router, a ping agent, and a pong agent. test1
+admitted test2 from the launcher's pending-requests panel; within
+five seconds (the agent-key relay tick) every agent on every
+machine was decrypting messages from every other agent on every
+other machine. No session rebuild was observed during the
+admission decision.
+
+% ==============================================================
+\section{What Remained Open}
+% ==============================================================
+
+V3 settles the core question (``can we have runtime admission
+without per-join data-plane outages''), but leaves three items as
+follow-on work.
+
+\textbf{Per-topic ACLs as second-line defence.} The fabric rule
+admits the broad \texttt{dverse/**} expression for all admitted
+CNs. A compromised admitted member can therefore flood any topic;
+the Megolm layer keeps the floods unreadable, but they still
+consume bandwidth. Adding per-topic ACL rules would let the
+fabric drop traffic from CNs that have no business sending it
+even though they are otherwise admitted.
+
+\textbf{Signed agent-key envelopes.} The
+\texttt{dverse/agent\_keys/**} relay accepts every envelope from
+every admitted CN. A compromised admitted member could spam
+fabricated session keys, bloating peers' receiver maps. Signing
+the envelope with the publishing operator's identity key would
+let receivers drop envelopes that fail verification.
+
+\textbf{Multi-session on one fabric.} V3 keeps the historic
+``one fabric per session'' shape from V2. A more general system
+would allow multiple sessions to share an mTLS fabric and rely on
+their Megolm keys for isolation. This works in principle (each
+session has its own \texttt{SessionKey}; cross-session encryption
+fails by design) but the launcher's chooser-and-state model is
+not yet structured for it.
+
+% ==============================================================
+\section{Cross-References}
+% ==============================================================
+
+The full evaluation of Zenoh's security model, including V1's
+ping-pong validation, V2's TLS handshake walkthrough, and the
+deep dive into V3's admission machinery, is in
+\emph{Zenoh evaluation and security architecture}. The Rust
+implementation that backs V3 is described in
+\emph{Framework architecture and integration}: which modules in
+the \texttt{bot\_framework} crate hold which piece of the
+handshake, and how the router, the launcher, and the agents
+compose against them.
+
+% ==============================================================
+\section*{Glossary}
+\addcontentsline{toc}{section}{Glossary}
+% ==============================================================
+
+\begin{description}[leftmargin=2.6cm, style=nextline, font=\sffamily\bfseries]
+  \item[ACL] Access Control List. In Zenoh, a JSON block in
+        the session configuration that defines which subjects
+        are allowed or denied on which key expressions. Read
+        once at session-open time; not reloadable at runtime.
+  \item[admission] The handshake by which a candidate node
+        becomes a member of a DVerse session and obtains the
+        session's Megolm key.
+  \item[AEAD] Authenticated Encryption with Associated Data.
+        The cipher mode used by Megolm; provides
+        confidentiality and integrity in a single primitive.
+  \item[CN] Common Name. The subject field of a TLS
+        certificate. The DVerse fabric identifies operators
+        by the CN in their leaf certificate.
+  \item[Curve25519] An elliptic-curve key-exchange primitive
+        used by Olm. The V3 identity binding ties an
+        operator's Curve25519 key to the TLS certificate via
+        an ECDSA signature.
+  \item[fabric] The set of mutually authenticated Zenoh peers
+        connected through the same mTLS-protected mesh.
+  \item[\texttt{GroupReceiver}] The Megolm decrypt half. One
+        is installed per known peer.
+  \item[Keycloak] An open-source identity-and-access
+        management product; the OIDC provider used by V3
+        certificate enrolment.
+  \item[Megolm] A group-ratchet cryptographic primitive from
+        the Matrix project, used in V3 to encrypt every agent
+        payload.
+  \item[mTLS] Mutual Transport Layer Security. Both ends of
+        the TLS connection authenticate with certificates.
+  \item[OIDC] OpenID Connect. The identity layer on top of
+        OAuth 2.0 used by Keycloak and Step-CA to validate
+        enrolment.
+  \item[Olm] A one-to-one cryptographic ratchet from the
+        Matrix project, used in V3 to wrap the Megolm
+        session key for a specific requester at admission
+        time.
+  \item[prekey] A short-lived Curve25519 key published by the
+        admission requester. Consumed once by the admin's
+        Olm session.
+  \item[\texttt{SessionKey}] The Megolm key material
+        exchanged during admission and installed by the
+        requester as a \texttt{GroupReceiver}.
+  \item[Step-CA] An online certificate authority from
+        Smallstep; configured with an OIDC provisioner that
+        validates JWTs against Keycloak.
+  \item[TLS] Transport Layer Security. The DVerse fabric
+        uses TLS 1.3 with both ends authenticated
+        (\emph{mTLS}).
+  \item[Zenoh] A decentralised pub/sub messaging protocol
+        from the Eclipse Foundation. The DVerse data plane
+        is built on Zenoh sessions.
+\end{description}
+
+\end{document}

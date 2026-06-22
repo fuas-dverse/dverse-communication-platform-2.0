@@ -1,0 +1,573 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{Latin Modern Roman}
+\setsansfont{Latin Modern Sans}
+\setmonofont{Hack}[Scale=0.85]
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage[dvipsnames,table]{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit,backgrounds,shapes.geometric,calc,decorations.pathmorphing}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{adjustbox}
+\usepackage[most]{tcolorbox}
+
+\definecolor{router}{HTML}{E74C3C}
+\definecolor{admitted}{HTML}{2ECC71}
+\definecolor{denied}{HTML}{E74C3C}
+\definecolor{tls}{HTML}{2ECC71}
+\definecolor{cipher}{HTML}{9B59B6}
+\definecolor{session}{HTML}{3498DB}
+\definecolor{ca}{HTML}{F39C12}
+\definecolor{codebg}{HTML}{F8F8F8}
+\definecolor{codeframe}{HTML}{DDDDDD}
+\definecolor{nixblue}{HTML}{5277C3}
+\definecolor{soft}{HTML}{F4F6F8}
+
+\newtcolorbox{abstractbox}[1][]{
+  enhanced, colback=soft, colframe=nixblue,
+  boxrule=0.6pt, arc=2pt, left=10pt, right=10pt, top=8pt, bottom=8pt,
+  title=\textbf{Abstract}, coltitle=white, colbacktitle=nixblue,
+  fonttitle=\sffamily\bfseries, #1
+}
+\newtcolorbox{findingbox}[1][]{
+  enhanced, colback=soft, colframe=router,
+  boxrule=0.6pt, arc=2pt, left=10pt, right=10pt, top=8pt, bottom=8pt,
+  title=\textbf{Finding}, coltitle=white, colbacktitle=router,
+  fonttitle=\sffamily\bfseries, #1
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  breakatwhitespace=true,
+  tabsize=2,
+  showstringspaces=false,
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textit{Iterating on the launcher UI and the agent graph view}}
+\fancyhead[R]{\small\textit{DVerse Platform}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black,
+}
+
+\title{%
+  \vspace{-1cm}
+  {\LARGE\bfseries Iterating on the Launcher UI and the Agent Graph View:\\
+  From egui Admission Window to a Stable Force-Directed Graph}
+}
+\author{Yordan Mitev}
+\date{\today}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+\begin{abstractbox}
+  Across the semester the operator-facing surface of the DVerse
+  platform moved through three shapes: a native egui admission
+  window bundled into the Zenoh router binary, a Tauri desktop
+  launcher that absorbed the router as a library and re-implemented
+  the admission flow in React, and a live agent/topic graph that
+  went through three layout attempts before settling on a
+  force-directed placement with a per-topology stability cache.
+  Each shape started from a hypothesis about where operator
+  attention should live, and each of the first two was closed by
+  something concrete that the next shape set out to fix. The graph
+  iteration is the strongest disconfirmation case: the layout
+  engine was not the problem, the snapshot-driven re-layout was.
+\end{abstractbox}
+
+\vspace{1em}
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{tabular}{|l|l|p{8cm}|}
+    \hline
+    \rowcolor{gray!15}
+    \textbf{Version} & \textbf{Date} & \textbf{Changes} \\
+    \hline
+    V1 & 21 June 2026 & Initial writeup of the V1 \(\rightarrow\)
+    V2 \(\rightarrow\) V3 iteration, the central
+    ``snapshot-driven re-layout was the problem'' finding inside
+    V3, the method and results, and the remaining open questions. \\
+    \hline
+  \end{tabular}
+  \caption{Revision history.}
+  \label{tab:ui-iter-history}
+\end{table}
+
+\newpage
+\tableofcontents
+\newpage
+
+% ==============================================================
+\section{Framing}
+% ==============================================================
+
+DVerse needs an operator-facing surface for two roles that overlap
+on the same person at different times: the admin who decides who
+joins a session, and the joiner who picks a session to join. By
+sprint 2 the platform had a working mTLS fabric and an admission
+protocol, but no place to drive admission from. By sprint 5 it
+had a single Tauri desktop launcher hosting login, session
+chooser, requesting-join wait state, the main bots view, the
+admin's pending-requests panel, and a live agent/topic graph.
+
+What follows is the trace of that move. Each iteration is a
+hypothesis about where operator attention should live, an attempt
+to ship it, and the finding that closed it off. The graph view
+gets the largest share of space because it is the iteration
+whose disconfirmations were most informative.
+
+% ==============================================================
+\section{V1: egui Admission GUI Bundled Into the Router}
+% ==============================================================
+
+\textbf{Hypothesis.} The admission decision is a property of the
+router, so it belongs in a window owned by the router process. A
+native eframe/egui window inside the \texttt{zenoh\_router} binary
+is enough to drive admit/deny.
+
+\textbf{What shipped.} Commit \texttt{2782235} introduced the
+\texttt{zenoh\_router} crate together with the egui GUI at
+\path{src/zenoh_router/src/gui.rs}. The window had a top status
+bar (Starting, Running, Reloading ACL, Error), a two-column
+central panel (pending CNs on the left with Admit and Deny
+buttons, admitted and denied lists on the right), and a bottom
+log panel that tailed the router's structured-log stream. It
+polled \texttt{Arc<Mutex<AppState>{}>} every 200\,ms and queued
+admit and deny actions through an \texttt{Action} enum drained by
+the router loop. The file started at 109 lines and grew to
+several hundred as the rest of the router's state was surfaced
+through it.
+
+\textbf{Disconfirmation.} egui locked the admission UX to whatever
+machine was running the router process. Operators who were not
+the admin had nothing to look at on their own machine. The
+joiner side of the admission protocol (the wait for a decision
+on \texttt{dverse/session/admission/<cn>}) had no rendering
+anywhere. The rest of the platform's operator workflow (login,
+session selection, bot management) had no obvious home that
+matched the egui surface in style or in lifecycle, so each piece
+risked landing somewhere different. egui was correct for the
+admin role on the admin machine, and the right shape for nothing
+else.
+
+% ==============================================================
+\section{V2: Tauri Launcher, Router as a Library}
+% ==============================================================
+
+This iteration is two commits sequenced through one decision: the
+operator surface should be a proper cross-platform desktop app,
+not an in-process egui window, and the router should be embedded
+in it rather than run alongside it.
+
+\textbf{Hypothesis.} Move the operator surface into a Tauri 2
+desktop app with a React, Vite, and Tailwind frontend. Then,
+once that app exists, embed the router into it as a library so
+admins and joiners both run one process and look at one window.
+The admission flow gets re-implemented inside the React UI where
+the rest of the operator workflow lives.
+
+\textbf{What shipped.}
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{Initial Tauri launcher} (\texttt{df4cbde}, by Denis
+        Lorenzo Neagoe). New tree at
+        \path{experiments/zenoh-client-launcher/} with a React +
+        Vite + Tailwind frontend and a Rust Tauri backend. The
+        backend exposed \texttt{start\_bot}, \texttt{stop\_bot},
+        and \texttt{get\_bot\_statuses} commands managing bot
+        agent child processes. Initial components were
+        \texttt{ConnectTab}, \texttt{BotsTab}, \texttt{BotCard},
+        and \texttt{BotForm}. The launcher connected to a Zenoh
+        router as a separate process. Two follow-ups (\texttt{ef3c023}
+        and \texttt{44ad31b}) moved autodiscovery to the login
+        screen and fixed the wiring so bots actually joined the
+        network.
+  \item \textbf{Router-as-library embed} (\texttt{1818090}, closes
+        \#105). The \texttt{zenoh\_router} crate was split so its
+        runtime lives in \path{src/zenoh_router/src/lib.rs} and
+        the binary is a thin shell over it. The egui GUI was
+        gated behind an \texttt{egui-gui} default feature so the
+        library can build without pulling \texttt{eframe} or
+        \texttt{egui}. The Tauri launcher (now at
+        \path{src/zenoh_client_launcher/}) depends on
+        \texttt{zenoh\_router} with
+        \texttt{default-features = false} and starts
+        \texttt{zenoh\_router::router::run} once at boot over a
+        shared \texttt{AppState}. One binary, one window. The
+        egui GUI was retired as the admin surface.
+  \item \textbf{Chooser, requesting-join, pending-requests panel}
+        (\texttt{45cf40f}, \#110). \texttt{ChooserScreen.tsx}
+        replaced the old create-or-join radio with a credentials
+        form plus a list of LAN sessions discovered through the
+        existing \texttt{discover\_routers} mDNS browse, with a
+        ``Create new session'' button alongside.
+        \texttt{RequestingJoinScreen.tsx} renders the wait state
+        between sending a JoinRequest and receiving an admission
+        decision. \texttt{PendingRequestsPanel.tsx} is the
+        admin's Allow / Deny list, calling
+        \texttt{admit\_request} and \texttt{deny\_request}
+        through the Tauri command bridge. The pending-requests
+        UI now lives inside the React app, next to the bots view
+        in \texttt{MainScreen}, rather than in a separate window.
+\end{itemize}
+
+\textbf{Outcome.} The operator surface collapsed into one process
+and one window. Admin and joiner both run the launcher; admin
+sees the pending-requests panel on the right of
+\texttt{MainScreen}, joiner sees \texttt{RequestingJoinScreen}
+while \texttt{join\_flow=Pending}. The egui pending-requests
+pattern lived on as a UX shape (a list of pending CNs with
+Allow and Deny), reimplemented in React on top of the embedded
+router. The egui binary still builds (the
+\texttt{egui-gui} feature is opt-in) but it is no longer the
+operator surface.
+
+% ==============================================================
+\section{V3: Live Agent Graph}
+% ==============================================================
+
+V2 settled the question of where operator attention lives, but
+not what the operator looks at once they get there. Beyond
+``which bots are online'', the operator has no view of who
+publishes what to whom. This is the gap V3 set out to close, and
+it is the iteration whose disconfirmations were most informative.
+
+\subsection{V3a: Dagre, Hierarchical Left-to-Right}
+
+\textbf{Hypothesis.} A hierarchical left-to-right layered layout
+is the right shape for ``who publishes what to whom''. Borrow
+the convention from ROS2's \texttt{rqt\_graph}: agents are oval
+nodes, topics are rectangles, edges are publishes and subscribes.
+Use \texttt{@xyflow/react} as the renderer and \texttt{dagre} as
+the layout engine.
+
+\textbf{What shipped.} Commit \texttt{1a33dbc} introduced
+\path{src/zenoh_client_launcher/frontend/src/components/GraphTab.tsx}.
+The tab consumed the existing
+\texttt{connected\_nodes[].agents[].publishes/subscribes} fields
+of the snapshot that \texttt{App.tsx} already polled every
+500\,ms. It built React Flow nodes and edges in a \texttt{useMemo}
+and laid them out with \texttt{dagre} (\texttt{LR} direction).
+Pure frontend, no backend change.
+
+\textbf{Disconfirmation.} The hierarchical layout was the wrong
+metaphor for a pub/sub mesh. Bidirectional relationships (a pair
+of agents that publish to each other's topics) flattened into a
+tangle of back-edges that defeated the layered reading. Worse,
+\texttt{dagre} re-laid out the entire graph on every snapshot
+tick. Status changes and heartbeat ticks (which do not change
+the graph's topology at all) caused the same nodes to land in
+slightly different positions, so the operator's eye lost track
+of which oval was which agent between ticks.
+
+\subsection{V3b: ELK, Layered and Orthogonal}
+
+\textbf{Hypothesis.} A more principled layout engine will hide
+the churn and route edges more cleanly. ELK's layered algorithm
+with orthogonal edge routing is a known-good answer to the same
+problem dagre was solving and ships better edge-bend behaviour.
+
+\textbf{What shipped.} \texttt{cd03590} added \texttt{elkjs} as a
+dependency; \texttt{4eb479c} swapped the dagre call in
+\texttt{GraphTab.tsx} for an ELK layered/orthogonal layout;
+\texttt{a736677} dropped \texttt{dagre} as unused.
+
+\textbf{Disconfirmation.} ELK routed edges noticeably better,
+but the underlying problem was unchanged. Nodes still jumped on
+every snapshot tick, because the layout was still being recomputed
+from scratch on every tick. ELK is also asynchronous, returning a
+\texttt{Promise}, so a slow tick's result could land after a
+fresh tick's snapshot was already rendered, producing flicker
+that dagre's synchronous call had not had. The algorithm change
+made one symptom better and another symptom worse, without
+moving the cause.
+
+\begin{findingbox}
+The layout engine was not the problem. The pattern of
+``recompute the whole layout from this tick's snapshot, then
+render'' was the problem. As long as positions are a function of
+the latest snapshot alone, any change to the snapshot relocates
+nodes, and the human's spatial memory of which oval is which
+agent breaks every 500\,ms. The fix is to make positions a
+function of \emph{topology} (which agents and topics exist, and
+which edges connect them) rather than of \emph{snapshot}
+(everything the polling loop returns including statuses and
+timestamps).
+\end{findingbox}
+
+\subsection{V3c: Force-Directed Plus Per-Topology Stability Cache}
+
+\textbf{Hypothesis.} Change two things at once. First, swap the
+layered metaphor for a force-directed placement so that the
+spatial layout reflects which nodes share connections rather than
+imposing a left-to-right pipeline. Second, key the layout cache
+by topology rather than by snapshot, so status and heartbeat
+ticks do not trigger relayout at all.
+
+\textbf{What shipped.} Commit \texttt{3c6d307} rewrote
+\texttt{GraphTab.tsx} around three pieces, visible in the
+current file:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{Force-directed layout via ELK's \texttt{force}
+        algorithm} (the Eades model). The configuration sets
+        \texttt{elk.algorithm} to \texttt{force},
+        \texttt{elk.force.iterations} to 400, and uses a
+        deterministic seed so the same topology produces the
+        same layout (otherwise the cache would be useless).
+  \item \textbf{Per-topology stability cache.} A
+        \texttt{topologyKey} derived from the sorted list of node
+        ids and edge ids drives the ELK effect. The
+        \texttt{useEffect} that calls ELK depends only on
+        \texttt{topologyKey}. Cached positions
+        (\texttt{layout.positions}) are merged onto the current
+        node set in a \texttt{useMemo}, so status and timestamp
+        churn flow through into colours and labels without
+        moving anything.
+  \item \textbf{Per-side handles for smart edge routing.}
+        Each node renders four target and four source handles
+        (top, right, bottom, left). For each edge the
+        lexicographically smaller endpoint picks the side
+        facing its peer; the larger endpoint mirrors. Handle
+        assignments are cached together with positions, so the
+        same edge does not flip sides between ticks even if a
+        cosmetic change runs through the
+        \texttt{useMemo}. The \texttt{cancelled} flag on the
+        layout promise drops stale ELK results from earlier
+        ticks.
+\end{itemize}
+
+\textbf{Outcome.} The graph stays visually stable as agents and
+topics come and go. A status change (online to degraded, for
+example) recolours a node without moving it. The arrival of a
+new agent shifts the layout once, when the new node's id enters
+the \texttt{topologyKey}, and then stops. The operator can
+follow what changed between ticks because what changed is the
+only thing on the screen that moved.
+
+% ==============================================================
+\section{Method}
+% ==============================================================
+
+In rough order:
+
+\begin{enumerate}[leftmargin=1.6em]
+  \item Built the egui admission GUI alongside the router and
+        ran it manually for a single-machine smoke test. The
+        admission flow worked; the operator-surface gap was
+        observable as soon as a second machine joined the test.
+  \item Took Denis's launcher drop (\texttt{df4cbde}) and read
+        it end-to-end before deciding to keep the Tauri shape
+        and discard the egui shape. The decision was that the
+        launcher's lifecycle (a desktop app the operator starts
+        like any other) matched the platform's intended use; the
+        router's lifecycle (a background process) did not.
+  \item Pulled the router runtime up into a library
+        (\texttt{1818090}). Made the egui dependency optional so
+        the launcher can link the router without pulling a GUI
+        toolkit it does not use. Re-derived the launcher's
+        \texttt{InnerState} on top of the router's
+        \texttt{AppState} so there is one source of truth for
+        snapshots.
+  \item Re-implemented the admission flow in React
+        (\texttt{45cf40f}): chooser, requesting-join wait
+        screen, pending-requests panel on the admin side. Kept
+        the wire format on \texttt{dverse/session/} unchanged;
+        the protocol from the security writeup did not move.
+  \item Built the first graph prototype on dagre. Observed the
+        layered metaphor flatten bidirectional pairs into
+        back-edges in the running launcher.
+  \item Swapped to ELK layered/orthogonal. Observed the edge
+        routing improve and the node-jumping symptom persist.
+        Wrote the finding down.
+  \item Pivoted the layout strategy: force-directed placement,
+        per-topology cache, per-side handles for smart edge
+        routing. Verified that status ticks do not relayout the
+        graph (positions stay byte-identical across snapshots
+        that change only status fields) and that new-agent
+        ticks relayout once and then settle.
+\end{enumerate}
+
+% ==============================================================
+\section{Results}
+% ==============================================================
+
+Table~\ref{tab:ui-iter-result-shape} summarises the
+operator-experience shape of each iteration. The entries are
+qualitative, the way the security writeup's result table is
+qualitative; the experiment is observational rather than
+benchmarked.
+
+\begin{table}[H]
+  \centering
+  \small
+  \begin{tabular}{|p{4.6cm}|p{2.2cm}|p{2.6cm}|p{4cm}|}
+    \hline
+    \rowcolor{gray!15}
+    \textbf{Property} & \textbf{V1 (egui)} & \textbf{V2 (Tauri)} & \textbf{V3 (graph)} \\
+    \hline
+    Operator windows open & 2 (router, plus whatever the rest of the UX lived in) & 1 & 1 \\
+    \hline
+    Joiner has a wait-state view & no & yes (\texttt{RequestingJoinScreen}) & yes \\
+    \hline
+    Admin admit/deny lives in & egui window & React panel inside main view & React panel inside main view \\
+    \hline
+    Graph view of agents and topics & no & no & yes \\
+    \hline
+    Graph stays stable across status ticks & N/A & N/A & yes (per-topology cache) \\
+    \hline
+  \end{tabular}
+  \caption{Operator-experience shape of each iteration.}
+  \label{tab:ui-iter-result-shape}
+\end{table}
+
+The end-to-end shape that V3 leaves behind is the launcher used
+in the security writeup's two-machine demo: one window per
+operator, login through chooser through main view, admission
+panel on the admin's main view, graph tab one click away with
+nodes that stop moving once the topology has settled. No
+benchmarking was done; the claim that the graph is stable across
+status ticks is from running the launcher and watching the
+positions, the same way the security writeup's sub-second
+agent-key relay claim is observational.
+
+% ==============================================================
+\section{What Remained Open}
+% ==============================================================
+
+V3 settles the core question (``can the launcher host the whole
+operator surface without losing visual continuity as the network
+changes?''), but leaves three items as follow-on work.
+
+\textbf{Graph view of cross-session traffic.} The graph reflects
+one session's agents and topics. Once V3 of the security model
+allows multiple sessions on one fabric (see
+\emph{Iterating on the Zenoh security model}, ``What Remained
+Open''), the graph will either need a per-session view or a way
+to overlay multiple sessions without making the picture
+unreadable. Neither is built.
+
+\textbf{Persisted layout across launcher restarts.} The
+stability cache lives in component state. A launcher restart
+loses it, and the first tick after restart relayouts the whole
+graph. Persisting the cache to a small local store keyed by
+topology would let restarts pick up where the last run left off.
+
+\textbf{Operator-driven layout overrides.} A force-directed
+layout sometimes places a node in a position the operator finds
+inconvenient. There is no way to pin a node manually and have
+ELK respect the pin on subsequent layouts. React Flow supports
+drag-to-move; wiring the dragged position back into the cache
+(and feeding it to ELK as a fixed coordinate) would close that
+gap.
+
+% ==============================================================
+\section{Cross-References}
+% ==============================================================
+
+The admission protocol that \texttt{PendingRequestsPanel}
+surfaces is defined in \emph{Iterating on the Zenoh security
+model}: the JoinRequest, the admin's Allow or Deny decision, the
+ACL coarsening and the Megolm key wrap that make admission
+viable without a per-join data-plane outage. The router-as-
+library refactor (\texttt{1818090}) that lets the launcher start
+the router in-process is described in \emph{Framework
+architecture and integration}, alongside the rest of the
+\texttt{bot\_framework} composition story.
+
+% ==============================================================
+\section*{Glossary}
+\addcontentsline{toc}{section}{Glossary}
+% ==============================================================
+
+\begin{description}[leftmargin=2.6cm, style=nextline, font=\sffamily\bfseries]
+  \item[ACL] Access Control List. In Zenoh, a JSON block in
+        the session configuration that defines which subjects
+        are allowed or denied on which key expressions. Why
+        ACLs cannot be the per-action admission knob is the
+        subject of \emph{Iterating on the Zenoh security
+        model}; what the launcher's pending-requests panel
+        surfaces is the admission protocol that replaced the
+        per-action ACL rewrite.
+  \item[CN] Common Name. The subject field of a TLS leaf
+        certificate. Used by the launcher's admission flow to
+        identify a requester.
+  \item[dagre] A JavaScript directed-graph layout library that
+        implements the Sugiyama layered algorithm. Used in
+        V3a, replaced in V3b.
+  \item[eframe] The application framework around egui. The
+        \texttt{RouterApp} struct in V1 implemented
+        \texttt{eframe::App}.
+  \item[egui] An immediate-mode Rust GUI library. The V1
+        admission window was an egui window inside the
+        \texttt{zenoh\_router} binary.
+  \item[ELK] The Eclipse Layout Kernel. A Java layout engine
+        with a JavaScript port (\texttt{elkjs}). Provides the
+        layered, orthogonal, and force algorithms used in V3b
+        and V3c.
+  \item[force-directed layout] A graph-layout family in which
+        edges act as springs pulling connected nodes together
+        and nodes act as charged particles pushing each other
+        apart. The placement reflects which nodes share
+        connections rather than imposing a fixed reading
+        direction. V3c uses ELK's \texttt{force} algorithm,
+        which implements the Eades model.
+  \item[JoinRequest] The signed message a candidate operator
+        publishes to \path{dverse/session/requests/<cn>} to
+        request admission. The launcher's
+        \texttt{RequestingJoinScreen} is the joiner-side wait
+        state for the matching admission decision.
+  \item[mDNS] Multicast DNS. Used by the launcher's
+        \texttt{discover\_routers} command to list sessions
+        visible on the LAN for the chooser screen.
+  \item[React] A JavaScript UI library. The launcher's
+        frontend is a React application.
+  \item[\texttt{rqt\_graph}] A ROS2 tool that draws nodes and
+        topics as a graph. The V3 graph tab borrows its
+        convention (ovals for nodes, rectangles for topics).
+  \item[Tailwind] A utility-first CSS framework used by the
+        launcher's frontend for component styling.
+  \item[Tauri] A Rust framework for building cross-platform
+        desktop applications with a web frontend and a Rust
+        backend. V2 onward, the launcher is a Tauri 2 app.
+  \item[topology] The set of agent nodes, topic nodes, and
+        publishes / subscribes edges that the graph view
+        renders. V3c's cache is keyed on this so the layout
+        recomputes when (and only when) the topology changes.
+  \item[Vite] The frontend build tool used by the launcher.
+  \item[\texttt{@xyflow/react}] The React-Flow rendering
+        library used by the graph tab to draw nodes, edges,
+        and handles. The layout engine (dagre, then ELK) feeds
+        \texttt{@xyflow/react} the coordinates.
+  \item[Zenoh] A decentralised pub/sub messaging protocol from
+        the Eclipse Foundation. The launcher embeds a Zenoh
+        router as a library.
+\end{description}
+
+\end{document}
