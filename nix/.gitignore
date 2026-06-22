@@ -1,0 +1,6 @@
+# Build outputs from `nix build`.
+result
+result-*
+
+# Local development VM images.
+*.qcow2
