@@ -50,7 +50,16 @@ export type AppScreen =
   | "chooser"
   | "requesting_join"
   | "loading"
-  | "main";
+  | "main"
+  | "kicked";
+
+/// Member-side terminal state shown when this node received a KickNotice.
+/// The Kicked screen renders `reason` and a "Back to chooser" action that
+/// calls the `back_to_chooser` Tauri command.
+export interface KickedDto {
+  reason: string | null;
+  banned: boolean;
+}
 
 /// Requester-side join-flow status.
 export type JoinFlowDto =
@@ -104,4 +113,9 @@ export interface AppSnapshot {
   visible_sessions: string[];
   join_flow: JoinFlowDto | null;
   pending_requests: PendingRequestDto[];
+  /// Admin-side: list of admitted member CNs. Drives the per-member Kick /
+  /// Ban buttons in MainScreen.
+  admitted: string[];
+  /// Member-side: set when a KickNotice landed for our own CN.
+  kicked: KickedDto | null;
 }

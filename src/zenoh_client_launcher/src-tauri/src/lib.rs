@@ -70,6 +70,11 @@ pub enum AppScreen {
     RequestingJoin,
     Loading,
     Main,
+    /// Member-side terminal screen shown when this node received a
+    /// `KickNotice` addressed to its own CN. The Kicked component shows
+    /// `snapshot.kicked.reason` and a "Back to chooser" button that calls the
+    /// `back_to_chooser` Tauri command.
+    Kicked,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +112,15 @@ impl From<&SessionRole> for SessionRoleDto {
     }
 }
 
+/// Member-side terminal state for the Kicked screen — surfaces the admin's
+/// reason and whether the CN was also banned (informational; ban list is
+/// admin-only state).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KickedDto {
+    pub reason: Option<String>,
+    pub banned: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSnapshot {
     pub screen: AppScreen,
@@ -123,6 +137,12 @@ pub struct AppSnapshot {
     pub join_flow: Option<JoinFlowDto>,
     /// Admin-side: queued join requests awaiting Allow/Deny.
     pub pending_requests: Vec<PendingRequestDto>,
+    /// Admin-side: list of admitted member CNs (mirrors `AppState.admitted`).
+    /// Drives the per-member Kick / Ban buttons in MainScreen.
+    pub admitted: Vec<String>,
+    /// Member-side: set after this node receives a `KickNotice` for its own
+    /// CN. Surfaces the admin's reason on the Kicked screen.
+    pub kicked: Option<KickedDto>,
 }
 
 // ── Status mappers (library types → serde DTOs) ───────────────────────────────
@@ -185,26 +205,35 @@ impl InnerState {
 
         // Effective screen: stay on Login/Register/Chooser until a session
         // is staged, then follow the router's lifecycle. For client role,
-        // override with RequestingJoin while we wait for an Allow.
+        // override with RequestingJoin while we wait for an Allow. The
+        // Kicked terminal state takes priority over Running so a member who
+        // gets kicked mid-session sees the screen flip immediately (#111).
         let waiting_for_admission = matches!(
             rs.join_flow,
             Some(zr::JoinFlowStatus::Pending { .. })
         );
+        let was_kicked = rs.kicked_screen.is_some();
         let screen = match self.screen {
             AppScreen::Login => AppScreen::Login,
             AppScreen::Register => AppScreen::Register,
             AppScreen::Chooser => AppScreen::Chooser,
-            _ => match rs.router_status {
-                zr::RouterStatus::Running => {
-                    if waiting_for_admission {
-                        AppScreen::RequestingJoin
-                    } else {
-                        AppScreen::Main
+            _ => {
+                if was_kicked {
+                    AppScreen::Kicked
+                } else {
+                    match rs.router_status {
+                        zr::RouterStatus::Running => {
+                            if waiting_for_admission {
+                                AppScreen::RequestingJoin
+                            } else {
+                                AppScreen::Main
+                            }
+                        }
+                        zr::RouterStatus::Error(_) => AppScreen::Login,
+                        _ => AppScreen::Loading,
                     }
                 }
-                zr::RouterStatus::Error(_) => AppScreen::Login,
-                _ => AppScreen::Loading,
-            },
+            }
         };
 
         let mut nodes: Vec<NodeInfo> = rs
@@ -254,6 +283,12 @@ impl InnerState {
             })
             .collect();
 
+        let admitted = rs.admitted.clone();
+        let kicked = rs.kicked_screen.as_ref().map(|k| KickedDto {
+            reason: k.reason.clone(),
+            banned: k.banned,
+        });
+
         AppSnapshot {
             screen,
             router_status,
@@ -265,6 +300,8 @@ impl InnerState {
             visible_sessions: rs.visible_sessions.clone(),
             join_flow,
             pending_requests,
+            admitted,
+            kicked,
         }
     }
 }
@@ -376,6 +413,82 @@ async fn deny_request(
     zenoh_router::admission_handler::deny(&session, &*router, &requester_cn, reason)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Admin action: kick an admitted member (#111). Rotates the Megolm session,
+/// reshares the new SessionKey to remaining members over their stored Olm
+/// channels, publishes a KickNotice for `requester_cn`, then drops the CN
+/// from `admitted` and triggers an ACL reload.
+#[tauri::command]
+async fn kick_member(
+    requester_cn: String,
+    reason: Option<String>,
+    state: State<'_, AppStateWrapper>,
+) -> Result<(), String> {
+    let (router, session) = {
+        let inner = state.0.lock().unwrap();
+        let r = inner.router.clone();
+        let s = r.lock().unwrap().zenoh_session.clone();
+        (r, s)
+    };
+    let session = session.ok_or("router not running")?;
+    zenoh_router::kick_handler::kick(&session, &*router, &requester_cn, reason, false)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Admin action: kick AND ban — same as `kick_member` plus the CN is added
+/// to the admin's in-memory ban list so subsequent JoinRequests are dropped
+/// before the pending panel. Ban list is RAM-only and clears on admin app
+/// restart.
+#[tauri::command]
+async fn ban_member(
+    requester_cn: String,
+    reason: Option<String>,
+    state: State<'_, AppStateWrapper>,
+) -> Result<(), String> {
+    let (router, session) = {
+        let inner = state.0.lock().unwrap();
+        let r = inner.router.clone();
+        let s = r.lock().unwrap().zenoh_session.clone();
+        (r, s)
+    };
+    let session = session.ok_or("router not running")?;
+    zenoh_router::kick_handler::kick(&session, &*router, &requester_cn, reason, true)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Member-side: from the Kicked screen, clear the kicked state and route the
+/// GUI back to the Chooser so the user can pick another session or host one.
+/// Distinct from `logout` because `logout` routes to Login; kick is a clean
+/// session-level eviction, not a credentials-level sign-out.
+#[tauri::command]
+fn back_to_chooser(state: State<'_, AppStateWrapper>) -> Result<(), String> {
+    let router = {
+        let mut st = state.0.lock().unwrap();
+        st.screen = AppScreen::Chooser;
+        Arc::clone(&st.router)
+    };
+    let mut r = router.lock().map_err(|e| e.to_string())?;
+    // Tear down the session view so the chooser starts fresh. We don't touch
+    // `banned_cns` here — back_to_chooser is the kicked MEMBER's exit, so
+    // their ban list is empty by construction; on the admin side it would be
+    // wiped by the next session boot in router.rs anyway, and clearing it
+    // here would silently nuke active bans if anyone wired this command to
+    // an admin context later. Keep this command opinionated to the kicked
+    // member's flow.
+    r.router_status = zr::RouterStatus::Idle;
+    r.session_id = String::new();
+    r.connected_nodes.clear();
+    r.admitted.clear();
+    r.crypto = None;
+    r.pending_requests.clear();
+    r.join_flow = None;
+    r.kicked_screen = None;
+    r.log.clear();
+    info!("back_to_chooser: kicked-screen acknowledged, session view cleared");
+    Ok(())
 }
 
 // ── Commands: auth ────────────────────────────────────────────────────────────
@@ -1317,6 +1430,9 @@ pub fn run() {
             get_bot_statuses,
             admit_request,
             deny_request,
+            kick_member,
+            ban_member,
+            back_to_chooser,
             pick_session,
             start_bridge,
             stop_bridge,

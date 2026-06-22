@@ -215,7 +215,13 @@ fn handle_decision(state: &Mutex<AppState>, payload: &[u8]) -> Result<()> {
         .map_err(|e| anyhow!("parse AdmissionDecision: {e}"))?;
 
     match dec {
-        AdmissionDecision::Allow { olm_message_type, olm_ciphertext_b64, admin_identity_key, .. } => {
+        AdmissionDecision::Allow {
+            olm_message_type,
+            olm_ciphertext_b64,
+            admin_identity_key,
+            admin_ed25519_key,
+            ..
+        } => {
             let ct = B64.decode(&olm_ciphertext_b64)
                 .map_err(|e| anyhow!("base64 decode olm ct: {e}"))?;
             let msg = OlmMessage::from_parts(olm_message_type, &ct)
@@ -232,7 +238,7 @@ fn handle_decision(state: &Mutex<AppState>, payload: &[u8]) -> Result<()> {
             }
             let crypto = st.crypto.as_mut()
                 .ok_or_else(|| anyhow!("no crypto state to receive admission"))?;
-            let (_session, plaintext) = crypto.identity.olm_decrypt_from(admin_id, &msg)
+            let (session, plaintext) = crypto.identity.olm_decrypt_from(admin_id, &msg)
                 .map_err(|e| anyhow!("olm decrypt: {e}"))?;
             let session_key = SessionKey::from_bytes(&plaintext)
                 .map_err(|e| anyhow!("SessionKey::from_bytes: {e}"))?;
@@ -241,6 +247,17 @@ fn handle_decision(state: &Mutex<AppState>, payload: &[u8]) -> Result<()> {
             // expose that, but the admin only runs one group at a time for now
             // so we use the admin's CN as a stable key.
             crypto.group_receivers.insert("admin".to_string(), receiver);
+            // Persist the established 1:1 Olm session so a later kick/ban
+            // rotation message (a Normal Olm message on the same session)
+            // can be decrypted without a fresh pre-key handshake (#111).
+            crypto.member_olm_session = Some(session);
+            // Pin the admin's Ed25519 fingerprint so the kick path (#145) can
+            // verify `KickNotice` signatures against a stored trust anchor
+            // rather than the notice itself. Sanity-check the wire string
+            // parses as an Ed25519 key before storing.
+            bot_framework::session_crypto::Ed25519PublicKey::from_base64(&admin_ed25519_key)
+                .map_err(|e| anyhow!("parse admin Ed25519: {e}"))?;
+            crypto.session_admin_ed25519_b64 = Some(admin_ed25519_key);
             st.join_flow = Some(JoinFlowStatus::Allowed);
             info!("admission Allow accepted, group receiver installed");
         }
@@ -265,7 +282,7 @@ pub async fn admit(
     state: &Mutex<AppState>,
     requester_cn: &str,
 ) -> Result<()> {
-    let (olm_type, olm_ct_b64, admin_id_b64, decision_key) = {
+    let (olm_type, olm_ct_b64, admin_id_b64, admin_ed25519_b64, decision_key) = {
         let mut st = state.lock().unwrap();
         let pending = st
             .pending_requests
@@ -280,24 +297,42 @@ pub async fn admit(
             .ok_or_else(|| anyhow!("admin has no group sender (not in Admin role)"))?;
         let session_key_bytes = group_sender.session_key().to_bytes();
         let admin_id_b64 = crypto.identity.curve25519_key_base64();
+        let admin_ed25519_b64 = crypto.identity.ed25519_key_base64();
 
         let peer_id = Curve25519PublicKey::from_base64(&req.identity_key)
             .map_err(|e| anyhow!("parse peer identity: {e}"))?;
         let peer_otk = Curve25519PublicKey::from_base64(&req.one_time_key)
             .map_err(|e| anyhow!("parse peer OTK: {e}"))?;
-        let (_session, msg) = crypto.identity
+        let (olm_session, msg) = crypto.identity
             .olm_encrypt_to(peer_id, peer_otk, &session_key_bytes)
             .map_err(|e| anyhow!("olm wrap session key: {e}"))?;
         let (msg_type, ct) = msg.to_parts();
 
+        // Persist the established 1:1 Olm session keyed by the requester's CN.
+        // The kick/ban path (#111) uses it for a Normal-message rotation send
+        // without consuming another OTK.
+        crypto
+            .admin_olm_sessions
+            .insert(req.requester_cn.clone(), olm_session);
+        // Remember the requester's identity so the kick/ban path can address
+        // the rotation message even after `pending_requests` is drained.
+        crypto.admitted_identities.insert(
+            req.requester_cn.clone(),
+            crate::state::AdmittedIdentity {
+                cn: req.requester_cn.clone(),
+                identity_key_b64: req.identity_key.clone(),
+            },
+        );
+
         let decision_key = format!("dverse/session/admission/{}", req.requester_cn);
-        (msg_type, B64.encode(&ct), admin_id_b64, decision_key)
+        (msg_type, B64.encode(&ct), admin_id_b64, admin_ed25519_b64, decision_key)
     };
 
     let decision = AdmissionDecision::Allow {
         olm_message_type: olm_type,
         olm_ciphertext_b64: olm_ct_b64,
         admin_identity_key: admin_id_b64,
+        admin_ed25519_key: admin_ed25519_b64,
         admitted_at: unix_epoch_secs(),
     };
     let payload = serde_json::to_vec(&decision)
@@ -486,6 +521,58 @@ mod tests {
         let res = super::handle_request(&admin_state, &payload);
         assert!(res.is_err(), "tampered binding must be rejected");
         assert!(admin_state.lock().unwrap().pending_requests.is_empty());
+    }
+
+    /// A banned CN's JoinRequest MUST be silently dropped by `handle_request`
+    /// before it lands in the admin's pending panel. Locks in the
+    /// admission_handler-side half of the kick/ban contract from #111.
+    #[test]
+    fn handle_request_drops_banned_cn_before_panel() {
+        use crate::state::AppState;
+        use bot_framework::config::SessionRole;
+        use std::sync::Mutex;
+
+        let mut admin_state = AppState::new(None);
+        admin_state.session_role = SessionRole::Admin;
+        admin_state.crypto = Some(crate::state::SessionCryptoState::new(true));
+        // Ban bob's CN before any request arrives.
+        admin_state.banned_cns.insert("bob".to_string());
+        let admin_state = Mutex::new(admin_state);
+
+        // Build a fully-valid JoinRequest (so we know the drop is on the
+        // ban path, not a verification failure).
+        let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        let mut dn = rcgen::DistinguishedName::new();
+        dn.push(rcgen::DnType::CommonName, "bob");
+        params.distinguished_name = dn;
+        let kp = rcgen::KeyPair::generate().unwrap();
+        let cert = params.self_signed(&kp).unwrap();
+        let cert_pem = cert.pem();
+        let key_pem = kp.serialize_pem();
+
+        let mut bob = SessionIdentity::new();
+        let otk = bob.generate_one_time_keys(1)[0];
+        bob.mark_keys_as_published();
+        let binding =
+            sign_enc_binding_pem(&key_pem, "bob", &bob.curve25519_key()).unwrap();
+
+        let req = JoinRequest {
+            requester_cn: "bob".into(),
+            identity_key: bob.curve25519_key_base64(),
+            fingerprint_key: bob.ed25519_key_base64(),
+            one_time_key: otk.to_base64(),
+            binding_signature_b64: B64.encode(&binding.signature),
+            cert_pem,
+            note: Some("let me back in".into()),
+            requested_at: "0".into(),
+        };
+        let payload = serde_json::to_vec(&req).unwrap();
+
+        super::handle_request(&admin_state, &payload).expect("banned drop is success");
+        assert!(
+            admin_state.lock().unwrap().pending_requests.is_empty(),
+            "banned CN's request must never reach the pending panel"
+        );
     }
 
     /// A fresh requester (no Olm session with the admin) MUST fail to

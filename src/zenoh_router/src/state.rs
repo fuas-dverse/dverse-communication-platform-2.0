@@ -6,7 +6,7 @@ use bot_framework::admission::JoinRequest;
 use bot_framework::announce::{AgentAnnounce, AgentStatusWire};
 use bot_framework::config::{DverseConfig, SessionRole};
 use bot_framework::session_crypto::{
-    Curve25519PublicKey, GroupReceiver, GroupSender, SessionIdentity,
+    Curve25519PublicKey, GroupReceiver, GroupSender, OlmSession, SessionIdentity,
 };
 use tokio::sync::Notify;
 
@@ -69,6 +69,21 @@ pub struct AppState {
     /// Bridge tokens issued by the admin. Each token allows a plain-TCP
     /// client to connect without mTLS, restricted to rooms + announce topics.
     pub bridge_tokens: Vec<String>,
+    /// Set on a member when the admin publishes a `KickNotice` matching this
+    /// node's CN. The Tauri snapshot routes the GUI to the Kicked screen and
+    /// surfaces `reason` + `banned`. Cleared by `back_to_chooser`. `None`
+    /// outside of a kicked state.
+    pub kicked_screen: Option<KickedState>,
+}
+
+/// Member-side flag set when this node received a `KickNotice` addressed to
+/// its own CN. Carries the admin's reason for display, plus whether the
+/// admin also banned the CN (informational — the ban list is admin-only,
+/// RAM-only state).
+#[derive(Debug, Clone)]
+pub struct KickedState {
+    pub reason: Option<String>,
+    pub banned: bool,
 }
 
 /// Per-session crypto material. Lifetime = one Zenoh session as a member
@@ -86,6 +101,41 @@ pub struct SessionCryptoState {
     /// Inbound Megolm sessions keyed by `MegolmSession.session_id()` —
     /// admitted clients hold the admin's sender; the admin holds its own.
     pub group_receivers: HashMap<String, GroupReceiver>,
+    /// Admin-side: 1:1 Olm sessions established as a side-effect of admitting
+    /// a member. Keyed by the member's CN. Survives across kick/ban rotations
+    /// so the admin can re-deliver a fresh Megolm `SessionKey` over a Normal
+    /// (post-pre-key) Olm message without consuming a new one-time key. Dropped
+    /// when the member is kicked (so a re-admission opens a fresh handshake).
+    pub admin_olm_sessions: HashMap<String, OlmSession>,
+    /// Admin-side: identity information remembered for each admitted member.
+    /// Populated at admit time; needed to address rotation messages and to
+    /// surface the admitted list to the GUI for the per-member Kick / Ban
+    /// buttons.
+    pub admitted_identities: HashMap<String, AdmittedIdentity>,
+    /// Member-side: the established 1:1 Olm session to the admin. Held so the
+    /// member can decrypt a rotation message that lands later in the session.
+    /// `None` on the admin side and until the member's Olm-Allow lands.
+    pub member_olm_session: Option<OlmSession>,
+    /// Member-side: the admin's Ed25519 signing key, base64, pinned at
+    /// admission time from `AdmissionDecision::Allow.admin_ed25519_key`.
+    /// `KickNotice` signature verification (#145) anchors against THIS
+    /// stored value, not the key the notice carries (the notice's
+    /// `admin_ed25519_key_b64` is informational; a stored-vs-notice
+    /// mismatch is itself a drop signal). `None` on the admin side and
+    /// until the member's Allow lands.
+    pub session_admin_ed25519_b64: Option<String>,
+}
+
+/// Per-admitted-CN identity record kept by the admin. Captured at admit time
+/// from the verified `JoinRequest`; lets the kick handler address a rotation
+/// message to each remaining member without reading the original (already
+/// consumed) join queue.
+#[derive(Debug, Clone)]
+pub struct AdmittedIdentity {
+    pub cn: String,
+    /// Base64 Curve25519 identity key — informational, also used to log a
+    /// fingerprint-style identifier in the GUI / tracing output.
+    pub identity_key_b64: String,
 }
 
 impl SessionCryptoState {
@@ -102,6 +152,10 @@ impl SessionCryptoState {
             published_otk,
             group_sender,
             group_receivers: HashMap::new(),
+            admin_olm_sessions: HashMap::new(),
+            admitted_identities: HashMap::new(),
+            member_olm_session: None,
+            session_admin_ed25519_b64: None,
         }
     }
 }
@@ -210,6 +264,7 @@ impl AppState {
             config_changed: Arc::new(Notify::new()),
             zenoh_session: None,
             bridge_tokens: Vec::new(),
+            kicked_screen: None,
         }
     }
 
