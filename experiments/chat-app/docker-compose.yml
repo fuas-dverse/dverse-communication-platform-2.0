@@ -1,4 +1,25 @@
 services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: chatapp-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - chatapp
+
+  zenoh-router:
+    image: eclipse/zenoh:latest
+    container_name: chatapp-zenoh-router
+    ports:
+      - "7447:7447/tcp"
+      - "7447:7447/udp"
+    restart: unless-stopped
+    networks:
+      - chatapp
+
   backend:
     build:
       context: ./backend
@@ -10,11 +31,14 @@ services:
       - OTEL_ENABLED=false
       - DB_PATH=/data/chatapp.db
       - BRIDGE_HOST=host.docker.internal
+      - ZENOH_ROUTER=tcp/zenoh-router:7447
     volumes:
       - backend_data:/data
       - ./backend:/app/backend
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      - zenoh-router
     restart: unless-stopped
     networks:
       - chatapp
@@ -96,6 +120,7 @@ volumes:
   prometheus_data:
   grafana_data:
   backend_data:
+  ollama_data:
 
 networks:
   chatapp:

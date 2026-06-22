@@ -15,11 +15,13 @@ Part of the Interaction Design (IXD) Research Group at Fontys ICT, Eindhoven. Su
   - [Tech Stack](#tech-stack)
   - [Current State](#current-state)
   - [Running the App](#running-the-app)
+    - [0. (Quickest) Start everything with Docker](#0-quickest-start-everything-with-docker)
     - [1. Start infrastructure](#1-start-infrastructure)
     - [2. Start the backend](#2-start-the-backend)
     - [3. Start the frontend](#3-start-the-frontend)
     - [4. (Optional) Start telemetry](#4-optional-start-telemetry)
     - [5. (Optional) Run bot agents for A2A](#5-optional-run-bot-agents-for-a2a)
+    - [6. (Optional) Run the Tauri desktop launcher](#6-optional-run-the-tauri-desktop-launcher)
   - [Architecture Decision Records](#architecture-decision-records)
   - [CI/CD \& Code Quality](#cicd--code-quality)
   - [Collaboration with other DVerse Groups](#collaboration-with-other-dverse-groups)
@@ -101,11 +103,24 @@ The `src/zenoh_client_launcher` Tauri app is a separate desktop client for manag
 
 The full setup guide is in [`experiments/chat-app/README.md`](experiments/chat-app/README.md). Quick start:
 
-### 1. Start infrastructure
+### 0. (Quickest) Start everything with Docker
 
 ```bash
 cd experiments/chat-app
-docker compose up zenoh-router ollama -d
+docker compose up
+```
+
+This starts backend, frontend, Zenoh router, Ollama, and all telemetry services in one command.
+- UI: http://localhost:5173
+- API: http://localhost:8080
+- Grafana: http://localhost:3000
+- Jaeger: http://localhost:16686
+
+### 1. Pull the LLM model (first run only)
+
+Ollama starts automatically with `docker compose up`. After first boot, pull the model:
+
+```bash
 docker exec chatapp-ollama ollama pull deepseek-r1:1.5b
 ```
 
@@ -147,6 +162,23 @@ uv run bot_agent.py --name bot-2   # second terminal
 ```
 
 Then in the chat: `/zenoh @bot-1 @bot-2 3 Should AI be regulated?`
+
+### 6. (Optional) Run the Tauri desktop launcher
+
+The `src/zenoh_client_launcher` app manages Zenoh sessions with mTLS. Requires Rust and Node installed.
+
+If you don't have the Tauri CLI yet:
+
+```bash
+cargo install tauri-cli
+```
+
+Then run:
+
+```bash
+cd src/zenoh_client_launcher
+cargo tauri dev
+```
 
 ---
 
