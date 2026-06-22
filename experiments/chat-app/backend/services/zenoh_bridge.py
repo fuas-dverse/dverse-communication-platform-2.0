@@ -62,6 +62,7 @@ class ZenohBridge:
         self.available = False
         self._broker = None         # injected after broker is initialised
         self._pending: dict[str, asyncio.Future] = {}
+        self._pending_ws: dict[str, asyncio.Future] = {}  # keyed "bot_name:room_id" for WS mode
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -177,7 +178,14 @@ class ZenohBridge:
                     try:
                         data = json.loads(raw)
                         if data.get("type") == "a2a_response":
-                            self._handle_room_message(data)
+                            from_bot = data.get("from") or data.get("sender", "")
+                            ws_key = f"{from_bot}:{data.get('room_id', '')}"
+                            if ws_key in self._pending_ws:
+                                fut = self._pending_ws.pop(ws_key)
+                                if not fut.done():
+                                    self._loop.call_soon_threadsafe(fut.set_result, data.get("content", ""))
+                            else:
+                                self._handle_room_message(data)
                         elif data.get("is_agent") is True:
                             self._handle_room_message(data)
                         elif "cn" in data:
@@ -362,38 +370,65 @@ class ZenohBridge:
 
         from ..telemetry import tracer, zenoh_duration
 
-        request_id = str(uuid.uuid4())
         loop = asyncio.get_event_loop()
-        future: asyncio.Future = loop.create_future()
-        self._pending[request_id] = future
-
-        payload = json.dumps({
-            "request_id": request_id,
-            "room_id": room_id,
-            "bot_name": bot_name,
-            "message": message,
-            "history": history,
-        }).encode()
 
         with tracer.start_as_current_span("zenoh.bot_request") as span:
             span.set_attribute("zenoh.room_id", room_id)
             span.set_attribute("zenoh.bot_name", bot_name)
-            span.set_attribute("zenoh.request_id", request_id)
             span.set_attribute("zenoh.timeout", timeout)
             t0 = time.monotonic()
             try:
-                await loop.run_in_executor(
-                    None,
-                    lambda: self._session.put(f"chat/{room_id}/request/{bot_name}", payload),
-                )
-                return await asyncio.wait_for(future, timeout=timeout)
-            except asyncio.TimeoutError:
-                self._pending.pop(request_id, None)
-                span.set_status(Status(StatusCode.ERROR, "timeout"))
-                raise TimeoutError(
-                    f"@{bot_name} did not respond within {timeout}s. "
-                    "Is the bot agent running and connected to the Zenoh router?"
-                )
+                if self._ws and self._loop:
+                    # WebSocket bridge mode — route through Tauri's A2A to Tauri-managed bots
+                    ws_key = f"{bot_name}:{room_id}"
+                    future: asyncio.Future = loop.create_future()
+                    self._pending_ws[ws_key] = future
+                    await self._ws_send(json.dumps({
+                        "type": "a2a",
+                        "to": bot_name,
+                        "room_id": room_id,
+                        "content": message,
+                    }))
+                    try:
+                        return await asyncio.wait_for(future, timeout=timeout)
+                    except asyncio.TimeoutError:
+                        self._pending_ws.pop(ws_key, None)
+                        span.set_status(Status(StatusCode.ERROR, "timeout"))
+                        raise TimeoutError(
+                            f"@{bot_name} did not respond within {timeout}s. "
+                            "Is the bot running in the Tauri client?"
+                        )
+                elif self._session:
+                    # Direct zenoh mode — use plain chat/request topics (bot_agent.py bots)
+                    request_id = str(uuid.uuid4())
+                    future = loop.create_future()
+                    self._pending[request_id] = future
+                    payload = json.dumps({
+                        "request_id": request_id,
+                        "room_id": room_id,
+                        "bot_name": bot_name,
+                        "message": message,
+                        "history": history,
+                    }).encode()
+                    await loop.run_in_executor(
+                        None,
+                        lambda: self._session.put(f"chat/{room_id}/request/{bot_name}", payload),
+                    )
+                    try:
+                        return await asyncio.wait_for(future, timeout=timeout)
+                    except asyncio.TimeoutError:
+                        self._pending.pop(request_id, None)
+                        span.set_status(Status(StatusCode.ERROR, "timeout"))
+                        raise TimeoutError(
+                            f"@{bot_name} did not respond within {timeout}s. "
+                            "Is the bot agent running and connected to the Zenoh router?"
+                        )
+                else:
+                    raise RuntimeError(
+                        "Zenoh not connected. Start the Tauri bridge or connect a Zenoh router."
+                    )
+            except TimeoutError:
+                raise
             except Exception as exc:
                 span.record_exception(exc)
                 span.set_status(Status(StatusCode.ERROR, str(exc)))
