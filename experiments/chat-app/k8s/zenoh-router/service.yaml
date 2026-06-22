@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: zenoh-router
+  namespace: dverse
+spec:
+  selector:
+    app: zenoh-router
+  ports:
+    - name: zenoh-tcp
+      port: 7447
+      targetPort: 7447
+      protocol: TCP
+    - name: zenoh-udp
+      port: 7447
+      targetPort: 7447
+      protocol: UDP
